@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::collections::HashMap;
 use self::xmltree::Element;
-use self::cgmath::{Vector3, Matrix3, InnerSpace, One, Deg};
+use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace, One, Deg};
 
 pub fn load_scene(filename: &str) -> (Scene, Camera) {
     let mut f = File::open(filename).expect("file not found");
@@ -18,7 +18,7 @@ pub fn load_scene(filename: &str) -> (Scene, Camera) {
 
     let mut scene = Scene {
         nodes: Vec::new(),
-        materials: Vec::new(),
+        materials: HashMap::new(),
         lights: Vec::new(),
     };
 
@@ -28,6 +28,13 @@ pub fn load_scene(filename: &str) -> (Scene, Camera) {
             "object" => {
                 scene.nodes.push(load_node(child));
             },
+            "material" => {
+                let (name, material) = load_material(child);
+                scene.materials.insert(name, material);
+            },
+            "light" => {
+                scene.lights.push(load_light(child));
+            }
             _ => {}
         }
     }
@@ -45,9 +52,10 @@ fn load_node(node_xml: &Element) -> Node {
                 Geometry::Sphere
             },
             _ => {
-                panic!("object type does not exist");
+                panic!("unknown object type");
             },
         },
+        material: node_xml.attributes.get("material").expect("no material given for object").clone(),
         name: node_xml.attributes.get("name").expect("no name given for object").clone(),
     };
 
@@ -61,9 +69,13 @@ fn load_node(node_xml: &Element) -> Node {
         } else {
             match child.name.as_ref() {
                 "scale" => {
-                    let scalar: f32 = child.attributes.get("value").expect("no value given for scale")
-                        .parse().expect("could not parse value for scale");
-                    let mat = scalar * Matrix3::one();
+                    let mat = if let Some(scalar) = child.attributes.get("value") {
+                        let scalar: f32 = scalar.parse().expect("could not parse value for scale");
+                        scalar * Matrix3::one()
+                    } else {
+                        let diagonal = read_vector3(&child.attributes);
+                        Matrix3::from_diagonal(diagonal)
+                    };
                     transform = mat * transform;
                     translate = mat * translate;
                 },
@@ -103,6 +115,65 @@ fn load_node(node_xml: &Element) -> Node {
     }
 }
 
+fn load_material(material_xml: &Element) -> (String, Material) {
+    let material_type = material_xml.attributes.get("type").expect("no type for material");
+    let name = material_xml.attributes.get("name").expect("no name for material");
+
+    match material_type.as_ref() {
+        "blinn" => {
+            let diffuse = read_color(&material_xml.get_child("diffuse").expect("no diffuse found for <material>").attributes);
+            let specular_xml = material_xml.get_child("specular").expect("no specular found for <material>");
+            let specular = read_color(&specular_xml.attributes);
+            let specular_value = specular_xml.attributes.get("value").expect("no value found for <specular>")
+                .parse().expect("could not parse glossiness value");
+            let glossiness = material_xml.get_child("glossiness").expect("no glossiness found for <material>").attributes
+                .get("value").expect("no value found for <glossiness>")
+                .parse().expect("could not parse glossiness value");
+
+            (name.clone(), Material {
+                diffuse: diffuse,
+                specular: specular,
+                specular_value: specular_value,
+                glossiness: glossiness,
+            })
+        },
+        _ => {
+            panic!("unknown material type");
+        }
+    }
+}
+
+fn load_light(light_xml: &Element) -> Light {
+    let light_type = light_xml.attributes.get("type").expect("no type for light");
+
+    let intensity = light_xml.get_child("intensity").expect("no intensity given for light")
+        .attributes.get("value").expect("no value for light intensity")
+        .parse().expect("could not parse light intensity value");
+
+    let light_type = match light_type.as_ref() {
+        "ambient" => {
+            LightType::Ambient
+        },
+        "direct" => {
+            LightType::Directional(read_vector3(&light_xml.get_child("direction")
+                .expect("no direction given for directional light").attributes)
+                .normalize())
+        },
+        "point" => {
+            LightType::Point(read_vector3(&light_xml.get_child("position")
+                .expect("no position given for positional light").attributes))
+        },
+        _ => {
+            panic!("unknown light type");
+        }
+    };
+
+    Light {
+        intensity: intensity,
+        light_type: light_type,
+    }
+}
+
 fn load_camera(camera_xml: &Element) -> Camera {
     let mut camera: Camera = Default::default();
 
@@ -131,5 +202,13 @@ fn read_vector3(attrs: &HashMap<String, String>) -> Vector3<f32> {
         attrs.get("x").unwrap().parse().unwrap(),
         attrs.get("y").unwrap().parse().unwrap(),
         attrs.get("z").unwrap().parse().unwrap(),
+    )
+}
+
+fn read_color(attrs: &HashMap<String, String>) -> Color {
+    Vector3::new(
+        attrs.get("r").unwrap().parse().unwrap(),
+        attrs.get("g").unwrap().parse().unwrap(),
+        attrs.get("b").unwrap().parse().unwrap(),
     )
 }

@@ -1,11 +1,12 @@
 extern crate cgmath;
 
-use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace};
+use std::collections::HashMap;
+use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace, Zero, Matrix};
 
 #[derive(Debug)]
 pub struct Scene {
     pub nodes: Vec<Node>,
-    pub materials: Vec<Material>,
+    pub materials: HashMap<String, Material>,
     pub lights: Vec<Light>,
 }
 
@@ -20,6 +21,7 @@ pub struct Node {
 #[derive(Debug)]
 pub struct Object {
     pub geometry: Geometry,
+    pub material: String,
     pub name: String,
 }
 
@@ -30,13 +32,18 @@ pub enum Geometry {
 
 #[derive(Debug)]
 pub struct Material {
-
+    pub diffuse: Color,
+    pub specular: Color,
+    pub specular_value: f32,
+    pub glossiness: f32,
 }
+
+pub type Color = Vector3<f32>;
 
 #[derive(Debug)]
 pub struct Light {
-    intensity: f32,
-    light_type: LightType,
+    pub intensity: f32,
+    pub light_type: LightType,
 }
 
 #[derive(Debug)]
@@ -55,6 +62,12 @@ pub struct Camera {
     pub img_height: u32,
 }
 
+pub struct HitInfo {
+    pub z: f32,
+    pub pos: Vector3<f32>,
+    pub normal: Vector3<f32>,
+}
+
 impl Default for Camera {
     fn default() -> Camera {
         Camera {
@@ -69,17 +82,17 @@ impl Default for Camera {
 }
 
 impl Scene {
-    pub fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<f32> {
-        let mut nearest = None;
+    pub fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<(HitInfo, &Node)> {
+        let mut nearest: Option<(HitInfo, &Node)> = None;
 
         for node in self.nodes.iter() {
-            if let Some(z) = node.intersect(pos, dir) {
-                if let Some(nearest_z) = nearest {
-                    if z < nearest_z {
-                        nearest = Some(z);
+            if let Some((hit_info, node)) = node.intersect(pos, dir) {
+                if let Some((HitInfo { z: nearest_z, pos: _, normal: _ }, _)) = nearest {
+                    if hit_info.z < nearest_z {
+                        nearest = Some((hit_info, node));
                     }
                 } else {
-                    nearest = Some(z);
+                    nearest = Some((hit_info, node));
                 }
             }
         }
@@ -89,39 +102,61 @@ impl Scene {
 }
 
 impl Node {
-    fn transform_ray(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+    fn ray_to_local_space(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
         let local_pos = self.to_local_space(pos);
         let local_dir = self.to_local_space(pos + dir) - local_pos;
         (local_pos, local_dir)
+    }
+
+    fn ray_from_local_space(&self, local_pos: Vector3<f32>, local_dir: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+        let pos = self.from_local_space(local_pos);
+        let dir = self.from_local_space(local_pos + local_dir) - pos;
+        (pos, dir)
     }
 
     fn to_local_space(&self, vec: Vector3<f32>) -> Vector3<f32> {
         self.transform.invert().unwrap() * (vec - self.translate)
     }
 
-    fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<f32> {
-        let (local_pos, local_dir) = self.transform_ray(pos, dir);
+    fn from_local_space(&self, vec: Vector3<f32>) -> Vector3<f32> {
+        self.transform * vec + self.translate
+    }
 
-        let mut nearest = self.object.geometry.intersect(local_pos, local_dir);
+    fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<(HitInfo, &Node)> {
+        let (local_pos, local_dir) = self.ray_to_local_space(pos, dir);
+
+        let nearest = self.object.geometry.intersect(local_pos, local_dir);
+        let mut nearest = nearest.map(|hit_info| (hit_info, self));
 
         for child in self.children.iter() {
-            if let Some(z) = child.intersect(local_pos, local_dir) {
-                if let Some(nearest_z) = nearest {
-                    if z < nearest_z {
-                        nearest = Some(z);
+            if let Some((hit_info, node)) = child.intersect(local_pos, local_dir) {
+                if let Some((HitInfo { z: nearest_z, pos: _, normal: _ }, _)) = nearest {
+                    if hit_info.z < nearest_z {
+                        nearest = Some((hit_info, node));
                     }
                 } else {
-                    nearest = Some(z);
+                    nearest = Some((hit_info, node));
                 }
             }
         }
+
+        /* transform hit info back out of local node space */
+        nearest = nearest.map(|(hit_info, node)| {
+            let (pos, normal) = self.ray_from_local_space(hit_info.pos, hit_info.normal);
+
+            (HitInfo {
+                z: hit_info.z,
+                pos: self.from_local_space(hit_info.pos),
+                normal: (self.transform.invert().unwrap().transpose() * hit_info.normal).normalize(),//normal.normalize(),
+            }, node)
+        });
 
         nearest
     }
 }
 
 impl Geometry {
-    fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<f32> {
+    fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<HitInfo> {
         match *self {
             Geometry::Sphere => {
                 let pos_dot_dir = pos.dot(dir);
@@ -133,10 +168,21 @@ impl Geometry {
                     let t1 = (-2.0 * pos_dot_dir + discriminant_sqrt) / (2.0 * dir_len_sqr);
                     let t2 = (-2.0 * pos_dot_dir - discriminant_sqrt) / (2.0 * dir_len_sqr);
 
-                    if t1 <= t2 && t1 > 0.0 {
-                        Some(t1)
-                    } else if t2 > 0.0 {
-                        Some(t2)
+                    if t1 > 0.0 || t2 > 0.0 {
+                        let t = if t1 <= t2 && t1 > 0.0 {
+                            t1
+                        } else {
+                            t2
+                        };
+
+                        let hit_pos = pos + t * dir;
+                        let normal = hit_pos.normalize();
+
+                        Some(HitInfo {
+                            z: t,
+                            pos: hit_pos,
+                            normal: normal,
+                        })
                     } else {
                         None
                     }
@@ -146,4 +192,43 @@ impl Geometry {
             }
         }
     }
+}
+
+impl Material {
+    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: HitInfo, lights: &Vec<Light>) -> Color {
+        lights.iter().map(|light| {
+            let l: Vector3<f32>;
+            match light.light_type {
+                LightType::Ambient => {
+                    return light.intensity * self.diffuse;
+                },
+                LightType::Directional(direction) => {
+                    l = -direction;
+                },
+                LightType::Point(location) => {
+                    l = (location - hit_info.pos).normalize();
+                },
+            };
+            let v = (pos - hit_info.pos).normalize();
+            let half = (l + v).normalize();
+            let n_dot_l = hit_info.normal.dot(l).max(0.0).min(255.0);
+            let n_dot_h = hit_info.normal.dot(half).max(0.0).min(255.0);
+
+            let diffuse = n_dot_l * self.diffuse;
+            let specular = self.specular_value * n_dot_h.powf(self.glossiness) * self.specular;
+
+            light.intensity * (diffuse + specular)
+        }).sum()
+        // hit_info.normal / 2.0 + Vector3::new(0.5, 0.5, 0.5)
+        // (1.0 - (hit_info.z / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
+        // (1.0 - ((hit_info.pos - pos).magnitude() / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
+
+    }
+}
+
+pub fn color_as_u8_array(color: Color) -> [u8; 4] {
+    [(color.x * 255.0).max(0.0).min(255.0) as u8,
+     (color.y * 255.0).max(0.0).min(255.0) as u8,
+     (color.z * 255.0).max(0.0).min(255.0) as u8,
+     255]
 }

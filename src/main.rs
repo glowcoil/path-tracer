@@ -1,10 +1,12 @@
 extern crate png;
 extern crate cgmath;
+extern crate rayon;
 
 mod load;
 mod scene;
 
 use load::*;
+use scene::*;
 
 use std::env;
 
@@ -15,6 +17,8 @@ use std::path::Path;
 use std::fs::File;
 use std::io::BufWriter;
 use png::HasParameters;
+
+use rayon::prelude::*;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -37,24 +41,27 @@ fn main() {
     let b = camera.pos + distance * camera.dir + (height / 2.0) * camera.up;
     let a = b - (width / 2.0) * right;
 
-    let mut img: Vec<u8> = Vec::with_capacity((camera.img_width * camera.img_height * 4) as usize);
+    let mut img: Vec<u8> = vec![0; (camera.img_width * camera.img_height * 4) as usize];
 
-    for row in 0..camera.img_height {
-        for col in 0..camera.img_width {
-            /* center of the current pixel */
-            let p = a + ((col as f32) + 0.5) * pixel_width * right - ((row as f32) + 0.5) * pixel_height * camera.up;
-            let dir = (p - camera.pos).normalize();
+    img.par_chunks_mut(4).enumerate().for_each(|(i, pixel)| {
+        let x = (i as u32) % camera.img_width;
+        let y = (i as u32) / camera.img_width;
 
-            let color = if let Some(z) = scene.intersect(camera.pos, dir) {
-                // println!("intersected");
-                [255, 255, 255, 255]
-            } else {
-                [0, 0, 0, 255]
-            };
+        /* center of the current pixel */
+        let p = a + ((x as f32) + 0.5) * pixel_width * right - ((y as f32) + 0.5) * pixel_height * camera.up;
+        let dir = (p - camera.pos).normalize();
 
-            img.extend(color.iter().cloned());
-        }
-    }
+        let color = if let Some((hit_info, node)) = scene.intersect(camera.pos, dir) {
+            let material = scene.materials.get(&node.object.material[..])
+                .expect(&format!("material does not exist for object {}", node.object.name));
+
+            color_as_u8_array(material.shade(camera.pos, dir, hit_info, &scene.lights))
+        } else {
+            [0, 0, 0, 255]
+        };
+
+        pixel.copy_from_slice(&color);
+    });
 
     save_img(&args[2], camera.img_width, camera.img_height, &img);
 }

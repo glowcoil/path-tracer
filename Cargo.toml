@@ -1,5 +1,5 @@
 [package]
-name = "prj1"
+name = "prj2"
 version = "0.1.0"
 authors = ["Micah Johnston <micah@glowcoil.com>"]
 
@@ -7,3 +7,4 @@ authors = ["Micah Johnston <micah@glowcoil.com>"]
 xmltree = "0.4.0"
 cgmath = "0.15.0"
 png = "0.9.0"
+rayon = "0.8.2"
