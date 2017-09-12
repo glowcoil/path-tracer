@@ -1,7 +1,7 @@
 extern crate cgmath;
 
 use std::collections::HashMap;
-use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace, Zero, Matrix};
+use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace, Matrix, ElementWise};
 
 #[derive(Debug)]
 pub struct Scene {
@@ -12,17 +12,17 @@ pub struct Scene {
 
 #[derive(Debug)]
 pub struct Node {
-    pub object: Object,
+    pub object: Option<Object>,
     pub transform: Matrix3<f32>,
     pub translate: Vector3<f32>,
     pub children: Vec<Node>,
+    pub name: String,
 }
 
 #[derive(Debug)]
 pub struct Object {
     pub geometry: Geometry,
     pub material: String,
-    pub name: String,
 }
 
 #[derive(Debug)]
@@ -40,13 +40,14 @@ pub struct Material {
 
 pub type Color = Vector3<f32>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Light {
     pub intensity: f32,
+    pub color: Color,
     pub light_type: LightType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum LightType {
     Ambient,
     Directional(Vector3<f32>),
@@ -125,7 +126,7 @@ impl Node {
     fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<(HitInfo, &Node)> {
         let (local_pos, local_dir) = self.ray_to_local_space(pos, dir);
 
-        let nearest = self.object.geometry.intersect(local_pos, local_dir);
+        let nearest = self.object.as_ref().and_then(|object| object.geometry.intersect(local_pos, local_dir) );
         let mut nearest = nearest.map(|hit_info| (hit_info, self));
 
         for child in self.children.iter() {
@@ -142,12 +143,10 @@ impl Node {
 
         /* transform hit info back out of local node space */
         nearest = nearest.map(|(hit_info, node)| {
-            let (pos, normal) = self.ray_from_local_space(hit_info.pos, hit_info.normal);
-
             (HitInfo {
                 z: hit_info.z,
                 pos: self.from_local_space(hit_info.pos),
-                normal: (self.transform.invert().unwrap().transpose() * hit_info.normal).normalize(),//normal.normalize(),
+                normal: (self.transform.invert().unwrap().transpose() * hit_info.normal).normalize(),
             }, node)
         });
 
@@ -195,15 +194,15 @@ impl Geometry {
 }
 
 impl Material {
-    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: HitInfo, lights: &Vec<Light>) -> Color {
+    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: HitInfo, lights: &Vec<&Light>) -> Color {
         lights.iter().map(|light| {
             let l: Vector3<f32>;
             match light.light_type {
                 LightType::Ambient => {
-                    return light.intensity * self.diffuse;
+                    return light.intensity * light.color.mul_element_wise(self.diffuse);
                 },
                 LightType::Directional(direction) => {
-                    l = -direction;
+                    l = (-direction).normalize();
                 },
                 LightType::Point(location) => {
                     l = (location - hit_info.pos).normalize();
@@ -211,16 +210,16 @@ impl Material {
             };
             let v = (pos - hit_info.pos).normalize();
             let half = (l + v).normalize();
-            let n_dot_l = hit_info.normal.dot(l).max(0.0).min(255.0);
-            let n_dot_h = hit_info.normal.dot(half).max(0.0).min(255.0);
+            let n_dot_l = hit_info.normal.dot(l).max(0.0).min(1.0);
+            let n_dot_h = hit_info.normal.dot(half).max(0.0).min(1.0);
 
-            let diffuse = n_dot_l * self.diffuse;
+            let diffuse = self.diffuse;
             let specular = self.specular_value * n_dot_h.powf(self.glossiness) * self.specular;
 
-            light.intensity * (diffuse + specular)
+            (light.intensity * n_dot_l * light.color).mul_element_wise(diffuse + specular)
         }).sum()
         // hit_info.normal / 2.0 + Vector3::new(0.5, 0.5, 0.5)
-        // (1.0 - (hit_info.z / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
+        // (1.0 - ((hit_info.z - 20.0) / 70.0)) * Vector3::new(1.0, 1.0, 1.0)
         // (1.0 - ((hit_info.pos - pos).magnitude() / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
 
     }

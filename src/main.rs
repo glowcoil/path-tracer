@@ -20,6 +20,8 @@ use png::HasParameters;
 
 use rayon::prelude::*;
 
+const BIAS: f32 = 0.1;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
@@ -51,11 +53,30 @@ fn main() {
         let p = a + ((x as f32) + 0.5) * pixel_width * right - ((y as f32) + 0.5) * pixel_height * camera.up;
         let dir = (p - camera.pos).normalize();
 
-        let color = if let Some((hit_info, node)) = scene.intersect(camera.pos, dir) {
-            let material = scene.materials.get(&node.object.material[..])
-                .expect(&format!("material does not exist for object {}", node.object.name));
+        let color: [u8; 4] = if let Some((hit_info, node)) = scene.intersect(camera.pos, dir) {
+            let material = scene.materials.get(&node.object.as_ref().unwrap().material[..])
+                .expect("material does not exist for object {}");
 
-            color_as_u8_array(material.shade(camera.pos, dir, hit_info, &scene.lights))
+            let lights: Vec<&Light> = {
+                scene.lights.iter().filter(|light| {
+                    match light.light_type {
+                        LightType::Ambient => true,
+                        LightType::Directional(dir) => {
+                            let ray = -dir;
+                            scene.intersect(hit_info.pos + BIAS * ray, ray).is_none()
+                        },
+                        LightType::Point(pos) => {
+                            let ray = (pos - hit_info.pos).normalize();
+                            match scene.intersect(hit_info.pos + BIAS * ray, ray) {
+                                Some((blocking_hit_info, _)) => blocking_hit_info.z > (pos - hit_info.pos).magnitude(),
+                                None => true
+                            }
+                        },
+                    }
+                })
+            }.collect();
+
+            color_as_u8_array(material.shade(camera.pos, dir, hit_info, &lights))
         } else {
             [0, 0, 0, 255]
         };

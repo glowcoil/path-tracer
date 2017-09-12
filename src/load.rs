@@ -46,18 +46,21 @@ pub fn load_scene(filename: &str) -> (Scene, Camera) {
 }
 
 fn load_node(node_xml: &Element) -> Node {
-    let object = Object {
-        geometry: match node_xml.attributes.get("type").expect("no type given for object").as_ref() {
-            "sphere" => {
-                Geometry::Sphere
+    let object = node_xml.attributes.get("type").map(|object_type| {
+        Object {
+            geometry: match object_type.as_ref() {
+                "sphere" => {
+                    Geometry::Sphere
+                },
+                _ => {
+                    panic!("unknown object type");
+                },
             },
-            _ => {
-                panic!("unknown object type");
-            },
-        },
-        material: node_xml.attributes.get("material").expect("no material given for object").clone(),
-        name: node_xml.attributes.get("name").expect("no name given for object").clone(),
-    };
+            material: node_xml.attributes.get("material").expect("no material given for object").clone(),
+        }
+    });
+
+    let name = node_xml.attributes.get("name").expect("no name given for object").clone();
 
     let mut transform = Matrix3::one();
     let mut translate = Vector3::new(0.0, 0.0, 0.0);
@@ -73,14 +76,14 @@ fn load_node(node_xml: &Element) -> Node {
                         let scalar: f32 = scalar.parse().expect("could not parse value for scale");
                         scalar * Matrix3::one()
                     } else {
-                        let diagonal = read_vector3(&child.attributes);
+                        let diagonal = read_vector3_default(&child.attributes, Vector3::new(1.0, 1.0, 1.0));
                         Matrix3::from_diagonal(diagonal)
                     };
                     transform = mat * transform;
                     translate = mat * translate;
                 },
                 "translate" => {
-                    translate += read_vector3(&child.attributes);
+                    translate += read_vector3_default(&child.attributes, Vector3::new(0.0, 0.0, 0.0));
                 },
                 "rotate" => {
                     let angle = Deg(
@@ -112,6 +115,7 @@ fn load_node(node_xml: &Element) -> Node {
         transform: transform,
         translate: translate,
         children: children,
+        name: name,
     }
 }
 
@@ -121,14 +125,22 @@ fn load_material(material_xml: &Element) -> (String, Material) {
 
     match material_type.as_ref() {
         "blinn" => {
-            let diffuse = read_color(&material_xml.get_child("diffuse").expect("no diffuse found for <material>").attributes);
+            let diffuse = material_xml.get_child("diffuse").and_then(|diffuse_xml| {
+                read_color(&diffuse_xml.attributes)
+            }).expect("no diffuse found for <material>");
+
             let specular_xml = material_xml.get_child("specular").expect("no specular found for <material>");
-            let specular = read_color(&specular_xml.attributes);
+            let specular = read_color(&specular_xml.attributes).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
             let specular_value = specular_xml.attributes.get("value").expect("no value found for <specular>")
                 .parse().expect("could not parse glossiness value");
-            let glossiness = material_xml.get_child("glossiness").expect("no glossiness found for <material>").attributes
-                .get("value").expect("no value found for <glossiness>")
-                .parse().expect("could not parse glossiness value");
+
+            let glossiness = if let Some(glossiness_xml) = material_xml.get_child("glossiness") {
+                glossiness_xml.attributes
+                    .get("value").expect("no value found for <glossiness>")
+                    .parse().expect("could not parse glossiness value")
+            } else {
+                1.0
+            };
 
             (name.clone(), Material {
                 diffuse: diffuse,
@@ -146,9 +158,10 @@ fn load_material(material_xml: &Element) -> (String, Material) {
 fn load_light(light_xml: &Element) -> Light {
     let light_type = light_xml.attributes.get("type").expect("no type for light");
 
-    let intensity = light_xml.get_child("intensity").expect("no intensity given for light")
-        .attributes.get("value").expect("no value for light intensity")
+    let intensity_xml = light_xml.get_child("intensity").expect("no intensity given for light");
+    let intensity = intensity_xml.attributes.get("value").expect("no value for light intensity")
         .parse().expect("could not parse light intensity value");
+    let color = read_color(&intensity_xml.attributes).unwrap_or(Vector3::new(1.0, 1.0, 1.0));
 
     let light_type = match light_type.as_ref() {
         "ambient" => {
@@ -170,6 +183,7 @@ fn load_light(light_xml: &Element) -> Light {
 
     Light {
         intensity: intensity,
+        color: color,
         light_type: light_type,
     }
 }
@@ -177,10 +191,10 @@ fn load_light(light_xml: &Element) -> Light {
 fn load_camera(camera_xml: &Element) -> Camera {
     let mut camera: Camera = Default::default();
 
-    camera.pos = read_vector3(&camera_xml.get_child("position").expect("no <position> tag found in <camera>").attributes);
-    camera.dir = (read_vector3(&camera_xml.get_child("target").expect("no <target> tag found in <camera>").attributes)
+    camera.pos = read_vector3_default(&camera_xml.get_child("position").expect("no <position> tag found in <camera>").attributes, camera.pos);
+    camera.dir = (read_vector3_default(&camera_xml.get_child("target").expect("no <target> tag found in <camera>").attributes, camera.pos + camera.dir)
         - camera.pos).normalize();
-    camera.up = read_vector3(&camera_xml.get_child("up").expect("no <up> tag found in <camera>").attributes);
+    camera.up = read_vector3_default(&camera_xml.get_child("up").expect("no <up> tag found in <camera>").attributes, camera.up);
     camera.fov = camera_xml.get_child("fov").expect("no <fov> tag found in <camera>")
         .attributes.get("value").expect("no value attribute found on <fov> tag")
         .parse().expect("could not parse camera fov");
@@ -198,17 +212,25 @@ fn load_camera(camera_xml: &Element) -> Camera {
 }
 
 fn read_vector3(attrs: &HashMap<String, String>) -> Vector3<f32> {
+    read_vector3_default(attrs, Vector3::new(0.0, 0.0, 0.0))
+}
+
+fn read_vector3_default(attrs: &HashMap<String, String>, default: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(
-        attrs.get("x").unwrap().parse().unwrap(),
-        attrs.get("y").unwrap().parse().unwrap(),
-        attrs.get("z").unwrap().parse().unwrap(),
+        attrs.get("x").and_then(|s| s.parse().ok()).unwrap_or(default.x),
+        attrs.get("y").and_then(|s| s.parse().ok()).unwrap_or(default.y),
+        attrs.get("z").and_then(|s| s.parse().ok()).unwrap_or(default.z),
     )
 }
 
-fn read_color(attrs: &HashMap<String, String>) -> Color {
-    Vector3::new(
-        attrs.get("r").unwrap().parse().unwrap(),
-        attrs.get("g").unwrap().parse().unwrap(),
-        attrs.get("b").unwrap().parse().unwrap(),
-    )
+fn read_color(attrs: &HashMap<String, String>) -> Option<Color> {
+    let r = attrs.get("r").and_then(|s| s.parse().ok());
+    let g = attrs.get("g").and_then(|s| s.parse().ok());
+    let b = attrs.get("b").and_then(|s| s.parse().ok());
+
+    if let (Some(r), Some(g), Some(b)) = (r, g, b) {
+        Some(Vector3::new(r, g, b))
+    } else {
+        None
+    }
 }
