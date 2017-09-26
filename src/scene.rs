@@ -36,6 +36,12 @@ pub struct Material {
     pub specular: Color,
     pub specular_value: f32,
     pub glossiness: f32,
+    pub reflection: Color,
+    pub reflection_value: f32,
+    pub refraction: Color,
+    pub refraction_value: f32,
+    pub refraction_index: f32,
+    pub absorption: Color,
 }
 
 pub type Color = Vector3<f32>;
@@ -67,6 +73,12 @@ pub struct HitInfo {
     pub z: f32,
     pub pos: Vector3<f32>,
     pub normal: Vector3<f32>,
+    pub side: Side,
+}
+
+pub enum Side {
+    Back,
+    Front,
 }
 
 impl Default for Camera {
@@ -82,16 +94,98 @@ impl Default for Camera {
     }
 }
 
+const BIAS: f32 = 0.1;
+
 impl Scene {
+    pub fn cast(&self, pos: Vector3<f32>, dir: Vector3<f32>, bounces: i32) -> Color {
+        if let Some((hit_info, node)) = self.intersect(pos, dir) {
+            let material = self.materials.get(&node.object.as_ref().unwrap().material[..])
+                .expect("material does not exist for object");
+
+            /* check if lights are blocked (meaning we're in shadow) */
+            let lights: Vec<&Light> = {
+                self.lights.iter().filter(|light| {
+                    match light.light_type {
+                        LightType::Ambient => true,
+                        LightType::Directional(dir) => {
+                            let ray = -dir;
+                            self.intersect(hit_info.pos + BIAS * ray, ray).is_none()
+                        },
+                        LightType::Point(pos) => {
+                            let ray = (pos - hit_info.pos).normalize();
+                            match self.intersect(hit_info.pos + BIAS * ray, ray) {
+                                Some((blocking_hit_info, _)) => blocking_hit_info.z > (pos - hit_info.pos).magnitude(),
+                                None => true
+                            }
+                        },
+                    }
+                })
+            }.collect();
+
+            let mut color = material.shade(pos, dir, &hit_info, &lights);
+
+            if (material.reflection_value > 0.0 || material.refraction_value > 0.0) && bounces > 0 {
+                let normal = match hit_info.side {
+                    Side::Back => -hit_info.normal,
+                    Side::Front => hit_info.normal,
+                };
+
+                let reflected_ray = reflect_ray(-dir, normal);
+                let reflected = material.reflection_value * material.reflection
+                    .mul_element_wise(self.cast(hit_info.pos + BIAS * reflected_ray, reflected_ray, bounces - 1));
+
+
+                match hit_info.side {
+                    Side::Back => {
+
+                    },
+                    Side::Front => {
+
+                    }
+                }
+                let (n1, n2) = match hit_info.side {
+                    Side::Back => (material.refraction_index, 1.0),
+                    Side::Front => (1.0, material.refraction_index)
+                };
+
+                let refracted = if let Some(refracted_ray) = refract_ray(-dir, normal, n1, n2) {
+                    material.refraction_value * material.refraction
+                        .mul_element_wise(self.cast(hit_info.pos + BIAS * refracted_ray, refracted_ray, bounces - 1))
+                } else {
+                    Vector3::new(0.0, 0.0, 0.0)
+                };
+
+                let cos = match hit_info.side {
+                    Side::Back => 0.0,
+                    Side::Front => hit_info.normal.dot(-dir),
+                };
+
+                let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
+                let ar = r0 + (1.0 - r0) * (1.0 - normal.dot(-dir)).powi(1);
+
+                // println!("{:?}", ar * material.reflection_value * material.reflection.mul_element_wise(reflected));
+
+                color += ar * reflected +
+                    (1.0 - ar) * refracted;
+            }
+
+            color
+        } else {
+            Vector3::new(0.0, 0.0, 0.0)
+        }
+    }
+
     pub fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<(HitInfo, &Node)> {
         let mut nearest: Option<(HitInfo, &Node)> = None;
 
         for node in self.nodes.iter() {
             if let Some((hit_info, node)) = node.intersect(pos, dir) {
-                if let Some((HitInfo { z: nearest_z, pos: _, normal: _ }, _)) = nearest {
-                    if hit_info.z < nearest_z {
-                        nearest = Some((hit_info, node));
-                    }
+                if let Some((nearest_hit_info, nearest_node)) = nearest {
+                    nearest = if hit_info.z < nearest_hit_info.z {
+                        Some((hit_info, node))
+                    } else {
+                        Some((nearest_hit_info, nearest_node))
+                    };
                 } else {
                     nearest = Some((hit_info, node));
                 }
@@ -99,6 +193,22 @@ impl Scene {
         }
 
         nearest
+    }
+}
+
+fn reflect_ray(vec: Vector3<f32>, normal: Vector3<f32>) -> Vector3<f32> {
+    -vec + 2.0 * normal.dot(vec) * normal
+}
+
+fn refract_ray(vec: Vector3<f32>, normal: Vector3<f32>, n1: f32, n2: f32) -> Option<Vector3<f32>> {
+    let n = n1 / n2;
+    let normal_dot_vec = normal.dot(vec);
+    let s = n * (normal_dot_vec * normal - vec);
+    let cos_sqr = 1.0 - n.powi(2) * (1.0 - normal_dot_vec.powi(2));
+    if cos_sqr >= 0.0 {
+        Some(s - cos_sqr.sqrt() * normal)
+    } else {
+        None
     }
 }
 
@@ -131,13 +241,15 @@ impl Node {
 
         for child in self.children.iter() {
             if let Some((hit_info, node)) = child.intersect(local_pos, local_dir) {
-                if let Some((HitInfo { z: nearest_z, pos: _, normal: _ }, _)) = nearest {
-                    if hit_info.z < nearest_z {
-                        nearest = Some((hit_info, node));
-                    }
+                if let Some((nearest_hit_info, nearest_node)) = nearest {
+                    nearest = if hit_info.z < nearest_hit_info.z {
+                        Some((hit_info, node))
+                    } else {
+                        Some((nearest_hit_info, nearest_node))
+                    };
                 } else {
                     nearest = Some((hit_info, node));
-                }
+                };
             }
         }
 
@@ -147,6 +259,7 @@ impl Node {
                 z: hit_info.z,
                 pos: self.from_local_space(hit_info.pos),
                 normal: (self.transform.invert().unwrap().transpose() * hit_info.normal).normalize(),
+                side: hit_info.side,
             }, node)
         });
 
@@ -168,11 +281,15 @@ impl Geometry {
                     let t2 = (-2.0 * pos_dot_dir - discriminant_sqrt) / (2.0 * dir_len_sqr);
 
                     if t1 > 0.0 || t2 > 0.0 {
-                        let t = if t1 <= t2 && t1 > 0.0 {
-                            t1
+                        let t;
+                        let side;
+                        if t1 > 0.0 && t2 > 0.0 {
+                            side = Side::Front;
+                            t = t1.min(t2);
                         } else {
-                            t2
-                        };
+                            side = Side::Back;
+                            t = t1.max(t2);
+                        }
 
                         let hit_pos = pos + t * dir;
                         let normal = hit_pos.normalize();
@@ -181,6 +298,7 @@ impl Geometry {
                             z: t,
                             pos: hit_pos,
                             normal: normal,
+                            side: side,
                         })
                     } else {
                         None
@@ -194,7 +312,7 @@ impl Geometry {
 }
 
 impl Material {
-    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: HitInfo, lights: &Vec<&Light>) -> Color {
+    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: &HitInfo, lights: &Vec<&Light>) -> Color {
         lights.iter().map(|light| {
             let l: Vector3<f32>;
             match light.light_type {

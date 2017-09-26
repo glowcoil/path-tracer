@@ -132,7 +132,7 @@ fn load_material(material_xml: &Element) -> (String, Material) {
             let specular_xml = material_xml.get_child("specular").expect("no specular found for <material>");
             let specular = read_color(&specular_xml.attributes).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
             let specular_value = specular_xml.attributes.get("value").expect("no value found for <specular>")
-                .parse().expect("could not parse glossiness value");
+                .parse().expect("could not parse specular value");
 
             let glossiness = if let Some(glossiness_xml) = material_xml.get_child("glossiness") {
                 glossiness_xml.attributes
@@ -142,11 +142,40 @@ fn load_material(material_xml: &Element) -> (String, Material) {
                 1.0
             };
 
+            let mut reflection = Vector3::new(1.0, 1.0, 1.0);
+            let mut reflection_value = 0.0;
+            if let Some(reflection_xml) = material_xml.get_child("reflection") {
+                reflection = read_color(&reflection_xml.attributes).unwrap_or(reflection);
+                reflection_value = reflection_xml.attributes.get("value")
+                    .and_then(|s| s.parse().ok()).unwrap_or(reflection_value);
+            }
+
+            let mut refraction = Vector3::new(1.0, 1.0, 1.0);
+            let mut refraction_value = 0.0;
+            let mut refraction_index = 1.0;
+            if let Some(refraction_xml) = material_xml.get_child("refraction") {
+                refraction = read_color(&refraction_xml.attributes).unwrap_or(refraction);
+                refraction_value = refraction_xml.attributes.get("value")
+                    .and_then(|s| s.parse().ok()).unwrap_or(refraction_value);
+                refraction_index = refraction_xml.attributes.get("index")
+                    .and_then(|s| s.parse().ok()).unwrap_or(refraction_index);
+            }
+
+            let absorption = material_xml.get_child("absorption").and_then(|absorption_xml| {
+                read_color(&absorption_xml.attributes)
+            }).unwrap_or(Vector3::new(1.0, 1.0, 1.0));
+
             (name.clone(), Material {
                 diffuse: diffuse,
                 specular: specular,
                 specular_value: specular_value,
                 glossiness: glossiness,
+                reflection: reflection,
+                reflection_value: reflection_value,
+                refraction: refraction,
+                refraction_value: refraction_value,
+                refraction_index: refraction_index,
+                absorption: absorption,
             })
         },
         _ => {
