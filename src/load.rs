@@ -1,5 +1,6 @@
 extern crate xmltree;
 extern crate cgmath;
+extern crate wavefront_obj;
 
 use scene::*;
 
@@ -8,6 +9,7 @@ use std::io::prelude::*;
 use std::collections::HashMap;
 use self::xmltree::Element;
 use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace, One, Deg};
+use self::wavefront_obj::obj;
 
 pub fn load_scene(filename: &str) -> (Scene, Camera) {
     let mut f = File::open(filename).expect("file not found");
@@ -52,6 +54,12 @@ fn load_node(node_xml: &Element) -> Node {
                 "sphere" => {
                     Geometry::Sphere
                 },
+                "plane" => {
+                    Geometry::Plane
+                },
+                "obj" => {
+                    load_obj(node_xml.attributes.get("name").expect("no filename given for obj"))
+                }
                 _ => {
                     panic!("unknown object type");
                 },
@@ -238,6 +246,62 @@ fn load_camera(camera_xml: &Element) -> Camera {
     camera.up = (camera.dir.cross(camera.up)).cross(camera.dir);
 
     camera
+}
+
+fn load_obj(filename: &str) -> Geometry {
+    let mut f = File::open(filename).expect("file not found");
+    let mut contents = String::new();
+    f.read_to_string(&mut contents).expect("could not read file");
+
+    match obj::parse(contents) {
+        Ok(obj_set) => {
+            if obj_set.objects.len() < 1 {
+                panic!("no objects found in file");
+            } else {
+                let object = &obj_set.objects[0];
+
+                let vertices: Vec<Vector3<f32>> = object.vertices.iter().map(|v| Vector3::new(v.x as f32, v.y as f32, v.z as f32)).collect();
+
+                let mut p1 = vertices[0];
+                let mut p2 = vertices[0];
+                for vertex in &vertices {
+                    if vertex.x < p1.x { p1.x = vertex.x; }
+                    if vertex.y < p1.y { p1.y = vertex.y; }
+                    if vertex.z < p1.z { p1.z = vertex.z; }
+                    if vertex.x > p2.x { p2.x = vertex.x; }
+                    if vertex.y > p2.y { p2.y = vertex.y; }
+                    if vertex.z > p2.z { p2.z = vertex.z; }
+                }
+
+                let mut triangles = Vec::new();
+                let mut normal_triangles = Vec::new();
+                let mut texture_triangles = Vec::new();
+
+                for geometry in &object.geometry {
+                    for shape in &geometry.shapes {
+                        if let obj::Primitive::Triangle(v1, v2, v3) = shape.primitive {
+                            triangles.push((v1.0, v2.0, v3.0));
+                            normal_triangles.push((v1.1.unwrap(), v2.1.unwrap(), v3.1.unwrap()));
+                            texture_triangles.push((v1.2.unwrap(), v2.2.unwrap(), v3.2.unwrap()));
+                        }
+                    }
+                }
+
+                Geometry::Mesh(Mesh {
+                    vertices: vertices,
+                    triangles: triangles,
+                    normals: object.normals.iter().map(|v| Vector3::new(v.x as f32, v.y as f32, v.z as f32)).collect(),
+                    normal_triangles: normal_triangles,
+                    texture_vertices: object.tex_vertices.iter().map(|v| Vector3::new(v.u as f32, v.v as f32, v.w as f32)).collect(),
+                    texture_triangles: texture_triangles,
+                    bounding_box: BoundingBox { p1: p1, p2: p2 },
+                })
+            }
+        },
+        Err(parse_error) => {
+            panic!(parse_error.message);
+        },
+    }
 }
 
 fn read_vector3(attrs: &HashMap<String, String>) -> Vector3<f32> {

@@ -1,6 +1,7 @@
 extern crate cgmath;
 
 use std::collections::HashMap;
+use std::f32;
 use self::cgmath::{Vector3, Matrix3, SquareMatrix, InnerSpace, Matrix, ElementWise};
 
 #[derive(Debug)]
@@ -27,7 +28,26 @@ pub struct Object {
 
 #[derive(Debug)]
 pub enum Geometry {
-    Sphere
+    Sphere,
+    Plane,
+    Mesh(Mesh)
+}
+
+#[derive(Debug)]
+pub struct Mesh {
+    pub vertices: Vec<Vector3<f32>>,
+    pub triangles: Vec<(usize, usize, usize)>,
+    pub normals: Vec<Vector3<f32>>,
+    pub normal_triangles: Vec<(usize, usize, usize)>,
+    pub texture_vertices: Vec<Vector3<f32>>,
+    pub texture_triangles: Vec<(usize, usize, usize)>,
+    pub bounding_box: BoundingBox,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BoundingBox {
+    pub p1: Vector3<f32>,
+    pub p2: Vector3<f32>,
 }
 
 #[derive(Debug)]
@@ -95,6 +115,7 @@ impl Default for Camera {
 }
 
 const BIAS: f32 = 0.1;
+const EPSILON: f32 = 1.0e-8;
 
 impl Scene {
     pub fn cast(&self, pos: Vector3<f32>, dir: Vector3<f32>, bounces: i32) -> Color {
@@ -269,6 +290,10 @@ impl Node {
 
 impl Geometry {
     fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<HitInfo> {
+        if !self.bounding_box().intersect(pos, dir) {
+            return None;
+        }
+
         match *self {
             Geometry::Sphere => {
                 let pos_dot_dir = pos.dot(dir);
@@ -306,8 +331,210 @@ impl Geometry {
                 } else {
                     None
                 }
+            },
+            Geometry::Plane => {
+                let t = -(pos.z / dir.z);
+                if t > 0.0 {
+                    let p = pos + t * dir;
+                    if -1.0 < p.x && p.x < 1.0 && -1.0 < p.y && p.y < 1.0 {
+                        Some(HitInfo {
+                            z: t,
+                            pos: p,
+                            normal: Vector3::new(0.0, 0.0, 1.0),
+                            side: if pos.z > 0.0 { Side::Front } else { Side::Back },
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+            Geometry::Mesh(ref mesh) => {
+                mesh.intersect(pos, dir)
             }
         }
+    }
+
+    fn bounding_box(&self) -> BoundingBox {
+        match *self {
+            Geometry::Sphere => {
+                BoundingBox::new(-1.0, -1.0, -1.0, 1.0, 1.0, 1.0)
+            },
+            Geometry::Plane => {
+                BoundingBox::new(-1.0, -1.0, 0.0, 1.0, 1.0, 0.0)
+            },
+            Geometry::Mesh(ref mesh) => {
+                mesh.bounding_box
+            }
+        }
+    }
+}
+
+impl Mesh {
+    fn get_point(&self, face: usize, u: f32, v: f32) -> Vector3<f32> {
+        let points = self.triangles[face];
+        (1.0 - u - v) * self.vertices[points.0] + u * self.vertices[points.1] + v * self.vertices[points.2]
+    }
+
+    fn get_normal(&self, face: usize, u: f32, v: f32) -> Vector3<f32> {
+        let points = self.normal_triangles[face];
+        (1.0 - u - v) * self.normals[points.0] + u * self.normals[points.1] + v * self.normals[points.2]
+    }
+
+    fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<HitInfo> {
+        let mut nearest: Option<HitInfo> = None;
+
+        for (i, triangle) in self.triangles.iter().enumerate() {
+            let a = self.vertices[triangle.0];
+            let b = self.vertices[triangle.1];
+            let c = self.vertices[triangle.2];
+
+            let ab = b - a;
+            let ac = c - a;
+
+            let pvec = dir.cross(ac);
+            let det = ab.dot(pvec);
+
+            if det < EPSILON {
+                continue;
+            }
+
+            let tvec = pos - a;
+
+            let u = tvec.dot(pvec);
+            if u < 0.0 || u > det {
+                continue;
+            }
+
+            let qvec = tvec.cross(ab);
+
+            let v = dir.dot(qvec);
+            if v < 0.0 || u + v > det {
+                continue;
+            }
+
+            let t = ac.dot(qvec) / det;
+            let u = u / det;
+            let v = v / det;
+
+            // let normal = (b - a).cross(c - a);
+            // // let area = normal.magnitude() / 2.0;
+            // let area = normal.dot(normal);
+            // // let normal = normal.normalize();
+
+            // let dir_dot_n = dir.dot(normal);
+            // if dir_dot_n.abs() < EPSILON {
+            //     /* the ray is parallel to the triangle */
+            //     continue;
+            // }
+            // let t = (a - pos).dot(normal) / dir_dot_n;
+
+            // if t < 0.0 {
+            //     /* the triangle is behind the ray */
+            //     continue;
+            // }
+
+            // let p = pos + t * dir;
+
+            // let u = (c - b).cross(p - b).dot(normal);
+            // if u < 0.0 {
+            //     continue;
+            // }
+
+            // let v = (a - c).cross(p - c).dot(normal);
+            // if v < 0.0 {
+            //     continue;
+            // }
+
+            // let w = (b - a).cross(p - a).dot(normal);
+            // if w < 0.0 {
+            //     continue;
+            // }
+
+            // /* at this point we know we are intersecting */
+            if let Some(ref nearest_hit_info) = nearest {
+                if nearest_hit_info.z < t {
+                    continue;
+                }
+            }
+            // println!("{}", (u+v+w)/area);
+
+            // let u = u / (u + v + w);
+            // let v = v / (u + v + w);
+
+
+            // println!("u:{},v:{},\ta:{:?},b:{:?},c:{:?}", u,v, a,b,c);
+            nearest = Some(HitInfo {
+                z: t,
+                pos: self.get_point(i, u, v),
+                normal: self.get_normal(i, u, v),
+                side: Side::Front,
+            })
+        }
+
+        nearest
+    }
+}
+
+impl BoundingBox {
+    fn new(x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32) -> BoundingBox {
+        BoundingBox {
+            p1: Vector3::new(x1, y1, z1),
+            p2: Vector3::new(x2, y2, z2),
+        }
+    }
+
+    fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> bool {
+        let mut in_x = f32::NEG_INFINITY;
+        let mut out_x = f32::INFINITY;
+        if dir.x == 0.0 {
+            if pos.x < self.p1.x || pos.x > self.p2.x {
+                return false;
+            }
+        } else {
+            in_x = (self.p1.x - pos.x) / dir.x;
+            out_x = (self.p2.x - pos.x) / dir.x;
+            if out_x < in_x {
+                let tmp = in_x;
+                in_x = out_x;
+                out_x = tmp;
+            }
+        }
+
+        let mut in_y = f32::NEG_INFINITY;
+        let mut out_y = f32::INFINITY;
+        if dir.y == 0.0 {
+            if pos.y < self.p1.y || pos.y > self.p2.y {
+                return false;
+            }
+        } else {
+            in_y = (self.p1.y - pos.y) / dir.y;
+            out_y = (self.p2.y - pos.y) / dir.y;
+            if out_y < in_y {
+                let tmp = in_y;
+                in_y = out_y;
+                out_y = tmp;
+            }
+        }
+
+        let mut in_z = f32::NEG_INFINITY;
+        let mut out_z = f32::INFINITY;
+        if dir.z == 0.0 {
+            if pos.z < self.p1.z || pos.z > self.p2.z {
+                return false;
+            }
+        } else {
+            in_z = (self.p1.z - pos.z) / dir.z;
+            out_z = (self.p2.z - pos.z) / dir.z;
+            if out_z < in_z {
+                let tmp = in_z;
+                in_z = out_z;
+                out_z = tmp;
+            }
+        }
+
+        in_x.max(in_y).max(in_z) <= out_x.min(out_y).min(out_z)
     }
 }
 
