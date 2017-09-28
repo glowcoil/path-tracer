@@ -281,8 +281,8 @@ fn load_obj(filename: &str) -> Geometry {
                     for shape in &geometry.shapes {
                         if let obj::Primitive::Triangle(v1, v2, v3) = shape.primitive {
                             triangles.push((v1.0, v2.0, v3.0));
-                            normal_triangles.push((v1.1.unwrap(), v2.1.unwrap(), v3.1.unwrap()));
-                            texture_triangles.push((v1.2.unwrap(), v2.2.unwrap(), v3.2.unwrap()));
+                            texture_triangles.push((v1.1.unwrap(), v2.1.unwrap(), v3.1.unwrap()));
+                            normal_triangles.push((v1.2.unwrap(), v2.2.unwrap(), v3.2.unwrap()));
                         }
                     }
                 }

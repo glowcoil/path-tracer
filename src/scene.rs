@@ -30,7 +30,7 @@ pub struct Object {
 pub enum Geometry {
     Sphere,
     Plane,
-    Mesh(Mesh)
+    Mesh(Mesh),
 }
 
 #[derive(Debug)]
@@ -119,81 +119,103 @@ const EPSILON: f32 = 1.0e-8;
 
 impl Scene {
     pub fn cast(&self, pos: Vector3<f32>, dir: Vector3<f32>, bounces: i32) -> Color {
+        let (color, distance) = self.cast_distance(pos, dir, bounces);
+        color
+    }
+
+    pub fn cast_distance(&self, pos: Vector3<f32>, dir: Vector3<f32>, bounces: i32) -> (Color, f32) {
         if let Some((hit_info, node)) = self.intersect(pos, dir) {
             let material = self.materials.get(&node.object.as_ref().unwrap().material[..])
                 .expect("material does not exist for object");
 
-            /* check if lights are blocked (meaning we're in shadow) */
-            let lights: Vec<&Light> = {
-                self.lights.iter().filter(|light| {
-                    match light.light_type {
-                        LightType::Ambient => true,
-                        LightType::Directional(dir) => {
-                            let ray = -dir;
-                            self.intersect(hit_info.pos + BIAS * ray, ray).is_none()
-                        },
-                        LightType::Point(pos) => {
-                            let ray = (pos - hit_info.pos).normalize();
-                            match self.intersect(hit_info.pos + BIAS * ray, ray) {
-                                Some((blocking_hit_info, _)) => blocking_hit_info.z > (pos - hit_info.pos).magnitude(),
-                                None => true
-                            }
-                        },
-                    }
-                })
-            }.collect();
-
-            let mut color = material.shade(pos, dir, &hit_info, &lights);
-
-            if (material.reflection_value > 0.0 || material.refraction_value > 0.0) && bounces > 0 {
-                let normal = match hit_info.side {
-                    Side::Back => -hit_info.normal,
-                    Side::Front => hit_info.normal,
-                };
-
-                let reflected_ray = reflect_ray(-dir, normal);
-                let reflected = material.reflection_value * material.reflection
-                    .mul_element_wise(self.cast(hit_info.pos + BIAS * reflected_ray, reflected_ray, bounces - 1));
-
-
-                match hit_info.side {
-                    Side::Back => {
-
-                    },
-                    Side::Front => {
-
-                    }
-                }
-                let (n1, n2) = match hit_info.side {
-                    Side::Back => (material.refraction_index, 1.0),
-                    Side::Front => (1.0, material.refraction_index)
-                };
-
-                let refracted = if let Some(refracted_ray) = refract_ray(-dir, normal, n1, n2) {
-                    material.refraction_value * material.refraction
-                        .mul_element_wise(self.cast(hit_info.pos + BIAS * refracted_ray, refracted_ray, bounces - 1))
-                } else {
-                    Vector3::new(0.0, 0.0, 0.0)
-                };
-
-                let cos = match hit_info.side {
-                    Side::Back => 0.0,
-                    Side::Front => hit_info.normal.dot(-dir),
-                };
-
-                let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
-                let ar = r0 + (1.0 - r0) * (1.0 - normal.dot(-dir)).powi(1);
-
-                // println!("{:?}", ar * material.reflection_value * material.reflection.mul_element_wise(reflected));
-
-                color += ar * reflected +
-                    (1.0 - ar) * refracted;
-            }
-
-            color
+            (self.shade(pos, dir, &hit_info, material, bounces), hit_info.z)
         } else {
-            Vector3::new(0.0, 0.0, 0.0)
+            (Vector3::new(0.0, 0.0, 0.0), 0.0)
         }
+    }
+
+    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: &HitInfo, material: &Material, bounces: i32) -> Color {
+        /* check if lights are blocked (meaning we're in shadow) */
+        let mut color = self.lights.iter().filter(|light| {
+            match light.light_type {
+                LightType::Ambient => true,
+                LightType::Directional(dir) => {
+                    let ray = -dir;
+                    self.intersect(hit_info.pos + BIAS * ray, ray).is_none()
+                },
+                LightType::Point(pos) => {
+                    let ray = (pos - hit_info.pos).normalize();
+                    match self.intersect(hit_info.pos + BIAS * ray, ray) {
+                        Some((blocking_hit_info, node)) => blocking_hit_info.z > (pos - hit_info.pos).magnitude(),
+                        None => true
+                    }
+                },
+            }
+        }).map(|light| {
+            let l: Vector3<f32>;
+            match light.light_type {
+                LightType::Ambient => {
+                    return light.intensity * light.color.mul_element_wise(material.diffuse);
+                },
+                LightType::Directional(direction) => {
+                    l = (-direction).normalize();
+                },
+                LightType::Point(location) => {
+                    l = (location - hit_info.pos).normalize();
+                },
+            };
+            let v = (pos - hit_info.pos).normalize();
+            let half = (l + v).normalize();
+            let n_dot_l = hit_info.normal.dot(l).max(0.0).min(1.0);
+            let n_dot_h = hit_info.normal.dot(half).max(0.0).min(1.0);
+
+            let diffuse = material.diffuse;
+            let specular = material.specular_value * n_dot_h.powf(material.glossiness) * material.specular;
+
+            (light.intensity * n_dot_l * light.color).mul_element_wise(diffuse + specular)
+        }).sum();
+
+        /* reflection and refraction */
+        if (material.reflection_value > 0.0 || material.refraction_value > 0.0) && bounces > 0 {
+            let normal = match hit_info.side {
+                Side::Back => -hit_info.normal,
+                Side::Front => hit_info.normal,
+            };
+
+            let reflected_ray = reflect_ray(-dir, normal);
+            let reflected = self.cast(hit_info.pos + BIAS * reflected_ray, reflected_ray, bounces - 1);
+
+            let (n1, n2) = match hit_info.side {
+                Side::Back => (material.refraction_index, 1.0),
+                Side::Front => (1.0, material.refraction_index)
+            };
+
+            /* Schlick's approximation */
+            let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
+            let mut ar = r0 + (1.0 - r0) * (1.0 - normal.dot(-dir)).powi(5);
+
+            let refracted = if let Some(refracted_ray) = refract_ray(-dir, normal, n1, n2) {
+                let (color, distance) = self.cast_distance(hit_info.pos + BIAS * refracted_ray, refracted_ray, bounces - 1);
+                let mut absorb = -distance * material.absorption;
+                absorb.x = absorb.x.exp();
+                absorb.y = absorb.y.exp();
+                absorb.z = absorb.z.exp();
+                color.mul_element_wise(absorb)
+            } else {
+                ar = 1.0;
+                Vector3::new(0.0, 0.0, 0.0)
+            };
+
+            color = color +
+                (material.reflection_value + ar * material.refraction_value) * reflected.mul_element_wise(material.reflection) +
+                (1.0 - ar) * material.refraction_value * refracted.mul_element_wise(material.refraction);
+        }
+
+        color
+
+        // hit_info.normal / 2.0 + Vector3::new(0.5, 0.5, 0.5)
+        // (1.0 - ((hit_info.z - 20.0) / 70.0)) * Vector3::new(1.0, 1.0, 1.0)
+        // (1.0 - ((hit_info.pos - pos).magnitude() / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
     }
 
     pub fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<(HitInfo, &Node)> {
@@ -396,80 +418,41 @@ impl Mesh {
             let pvec = dir.cross(ac);
             let det = ab.dot(pvec);
 
-            if det < EPSILON {
+            if det.abs() < EPSILON {
                 continue;
             }
 
             let tvec = pos - a;
 
-            let u = tvec.dot(pvec);
-            if u < 0.0 || u > det {
+            let u = tvec.dot(pvec) / det;
+            if u < 0.0 || u > 1.0 {
                 continue;
             }
 
             let qvec = tvec.cross(ab);
 
-            let v = dir.dot(qvec);
-            if v < 0.0 || u + v > det {
+            let v = dir.dot(qvec) / det;
+            if v < 0.0 || u + v > 1.0 {
                 continue;
             }
 
             let t = ac.dot(qvec) / det;
-            let u = u / det;
-            let v = v / det;
+            if t < 0.0 {
+                continue;
+            }
 
-            // let normal = (b - a).cross(c - a);
-            // // let area = normal.magnitude() / 2.0;
-            // let area = normal.dot(normal);
-            // // let normal = normal.normalize();
-
-            // let dir_dot_n = dir.dot(normal);
-            // if dir_dot_n.abs() < EPSILON {
-            //     /* the ray is parallel to the triangle */
-            //     continue;
-            // }
-            // let t = (a - pos).dot(normal) / dir_dot_n;
-
-            // if t < 0.0 {
-            //     /* the triangle is behind the ray */
-            //     continue;
-            // }
-
-            // let p = pos + t * dir;
-
-            // let u = (c - b).cross(p - b).dot(normal);
-            // if u < 0.0 {
-            //     continue;
-            // }
-
-            // let v = (a - c).cross(p - c).dot(normal);
-            // if v < 0.0 {
-            //     continue;
-            // }
-
-            // let w = (b - a).cross(p - a).dot(normal);
-            // if w < 0.0 {
-            //     continue;
-            // }
-
-            // /* at this point we know we are intersecting */
+            /* at this point we know we are intersecting */
             if let Some(ref nearest_hit_info) = nearest {
                 if nearest_hit_info.z < t {
                     continue;
                 }
             }
-            // println!("{}", (u+v+w)/area);
 
-            // let u = u / (u + v + w);
-            // let v = v / (u + v + w);
-
-
-            // println!("u:{},v:{},\ta:{:?},b:{:?},c:{:?}", u,v, a,b,c);
             nearest = Some(HitInfo {
                 z: t,
                 pos: self.get_point(i, u, v),
                 normal: self.get_normal(i, u, v),
-                side: Side::Front,
+                side: if det > 0.0 { Side::Front } else { Side::Back },
             })
         }
 
@@ -535,38 +518,6 @@ impl BoundingBox {
         }
 
         in_x.max(in_y).max(in_z) <= out_x.min(out_y).min(out_z)
-    }
-}
-
-impl Material {
-    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: &HitInfo, lights: &Vec<&Light>) -> Color {
-        lights.iter().map(|light| {
-            let l: Vector3<f32>;
-            match light.light_type {
-                LightType::Ambient => {
-                    return light.intensity * light.color.mul_element_wise(self.diffuse);
-                },
-                LightType::Directional(direction) => {
-                    l = (-direction).normalize();
-                },
-                LightType::Point(location) => {
-                    l = (location - hit_info.pos).normalize();
-                },
-            };
-            let v = (pos - hit_info.pos).normalize();
-            let half = (l + v).normalize();
-            let n_dot_l = hit_info.normal.dot(l).max(0.0).min(1.0);
-            let n_dot_h = hit_info.normal.dot(half).max(0.0).min(1.0);
-
-            let diffuse = self.diffuse;
-            let specular = self.specular_value * n_dot_h.powf(self.glossiness) * self.specular;
-
-            (light.intensity * n_dot_l * light.color).mul_element_wise(diffuse + specular)
-        }).sum()
-        // hit_info.normal / 2.0 + Vector3::new(0.5, 0.5, 0.5)
-        // (1.0 - ((hit_info.z - 20.0) / 70.0)) * Vector3::new(1.0, 1.0, 1.0)
-        // (1.0 - ((hit_info.pos - pos).magnitude() / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
-
     }
 }
 
