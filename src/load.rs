@@ -3,6 +3,8 @@ extern crate cgmath;
 extern crate wavefront_obj;
 
 use scene::*;
+use geometry::*;
+use bvh::*;
 
 use std::fs::File;
 use std::io::prelude::*;
@@ -287,6 +289,9 @@ fn load_obj(filename: &str) -> Geometry {
                     }
                 }
 
+                let bounding_box = BoundingBox { p1: p1, p2: p2 };
+                let bvh = Mesh::build_bvh(&vertices, &triangles, bounding_box);
+
                 Geometry::Mesh(Mesh {
                     vertices: vertices,
                     triangles: triangles,
@@ -294,7 +299,8 @@ fn load_obj(filename: &str) -> Geometry {
                     normal_triangles: normal_triangles,
                     texture_vertices: object.tex_vertices.iter().map(|v| Vector3::new(v.u as f32, v.v as f32, v.w as f32)).collect(),
                     texture_triangles: texture_triangles,
-                    bounding_box: BoundingBox { p1: p1, p2: p2 },
+                    bounding_box: bounding_box,
+                    bvh: bvh,
                 })
             }
         },

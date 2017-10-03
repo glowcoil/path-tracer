@@ -4,6 +4,8 @@ extern crate rayon;
 
 mod load;
 mod scene;
+mod geometry;
+mod bvh;
 
 use load::*;
 use scene::*;
