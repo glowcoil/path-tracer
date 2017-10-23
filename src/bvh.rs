@@ -60,7 +60,6 @@ impl BVH {
 
         /* partition indices */
         let mut j = 0;
-        let pred;
         if x_size > y_size && x_size > z_size {
             let pivot = root_box.p1.x + x_size / 2.0;
 

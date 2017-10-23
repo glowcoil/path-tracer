@@ -121,6 +121,8 @@ impl Mesh {
     }
 
     fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<HitInfo> {
+        let mut nearest: Option<HitInfo> = None;
+
         for i in self.bvh.traverse(pos, dir) {
             let triangle = self.triangles[i];
             let a = self.vertices[triangle.0];
@@ -128,16 +130,21 @@ impl Mesh {
             let c = self.vertices[triangle.2];
 
             if let Some((t, u, v, side)) = Self::intersect_triangle(a, b, c, pos, dir) {
-                return Some(HitInfo {
+                if let Some(ref nearest_hit_info) = nearest {
+                    if nearest_hit_info.z < t {
+                        continue;
+                    }
+                }
+                nearest = Some(HitInfo {
                     z: t,
                     pos: self.get_point(i, u, v),
                     normal: self.get_normal(i, u, v),
                     side: side,
-                });
+                })
             }
         }
 
-        None
+        nearest
     }
 
     // fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<HitInfo> {
