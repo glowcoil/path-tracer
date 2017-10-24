@@ -238,12 +238,6 @@ impl Node {
         (local_pos, local_dir)
     }
 
-    fn ray_from_local_space(&self, local_pos: Vector3<f32>, local_dir: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
-        let pos = self.from_local_space(local_pos);
-        let dir = self.from_local_space(local_pos + local_dir) - pos;
-        (pos, dir)
-    }
-
     fn to_local_space(&self, vec: Vector3<f32>) -> Vector3<f32> {
         self.transform.invert().unwrap() * (vec - self.translate)
     }

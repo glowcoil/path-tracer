@@ -2,7 +2,7 @@ extern crate cgmath;
 
 use std::f32;
 use std::ops::IndexMut;
-use self::cgmath::{Vector3, vec3};
+use self::cgmath::Vector3;
 
 #[derive(Debug)]
 pub struct BVH {

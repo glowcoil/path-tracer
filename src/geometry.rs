@@ -213,7 +213,7 @@ impl Mesh {
     pub fn build_bvh(vertices: &[Vector3<f32>], triangles: &[(usize, usize, usize)], bounding_box: BoundingBox) -> BVH {
         let mut boxes = Vec::with_capacity(triangles.len());
 
-        for (i, triangle) in triangles.iter().enumerate() {
+        for triangle in triangles.iter() {
             let a = vertices[triangle.0];
             let b = vertices[triangle.1];
             let c = vertices[triangle.2];
