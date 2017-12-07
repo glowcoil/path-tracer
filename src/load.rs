@@ -1,6 +1,7 @@
 extern crate xmltree;
 extern crate cgmath;
 extern crate wavefront_obj;
+extern crate png;
 
 use scene::*;
 use geometry::*;
@@ -20,28 +21,53 @@ pub fn load_scene(filename: &str) -> (Scene, Camera) {
 
     let xml = Element::parse(contents.as_bytes()).expect("could not parse xml");
 
-    let mut scene = Scene {
-        nodes: Vec::new(),
-        materials: HashMap::new(),
-        lights: Vec::new(),
-    };
-
     let scene_xml = xml.get_child("scene").expect("no <scene> tag found");
+
+    let mut nodes = Vec::new();
+    let mut materials = HashMap::new();
+    let mut lights = Vec::new();
+
+    let mut background = Texture {
+        data: TextureData::Blank,
+        color: Vector3::new(0.0, 0.0, 0.0),
+        transform: Transform::default(),
+    };
+    if let Some(background_xml) = scene_xml.get_child("background") {
+        background = load_texture(background_xml, Vector3::new(1.0, 1.0, 1.0));
+    }
+
+    let mut environment = Texture {
+        data: TextureData::Blank,
+        color: Vector3::new(0.0, 0.0, 0.0),
+        transform: Transform::default(),
+    };
+    if let Some(environment_xml) = scene_xml.get_child("environment") {
+        environment = load_texture(environment_xml, Vector3::new(1.0, 1.0, 1.0));
+    }
+
     for child in &scene_xml.children {
         match child.name.as_ref() {
             "object" => {
-                scene.nodes.push(load_node(child));
+                nodes.push(load_node(child));
             },
             "material" => {
                 let (name, material) = load_material(child);
-                scene.materials.insert(name, material);
+                materials.insert(name, material);
             },
             "light" => {
-                scene.lights.push(load_light(child));
+                lights.push(load_light(child));
             }
             _ => {}
         }
     }
+
+    let scene = Scene {
+        nodes: nodes,
+        materials: materials,
+        lights: lights,
+        background: background,
+        environment: environment,
+    };
 
     let camera_xml = xml.get_child("camera").expect("no <camera> tag found");
     let camera = load_camera(camera_xml);
@@ -72,58 +98,18 @@ fn load_node(node_xml: &Element) -> Node {
 
     let name = node_xml.attributes.get("name").expect("no name given for object").clone();
 
-    let mut transform = Matrix3::one();
-    let mut translate = Vector3::new(0.0, 0.0, 0.0);
-
     let mut children: Vec<Node> = Vec::new();
     for child in &node_xml.children {
         if child.name == "object" {
             children.push(load_node(child));
-        } else {
-            match child.name.as_ref() {
-                "scale" => {
-                    let mat = if let Some(scalar) = child.attributes.get("value") {
-                        let scalar: f32 = scalar.parse().expect("could not parse value for scale");
-                        scalar * Matrix3::one()
-                    } else {
-                        let diagonal = read_vector3_default(&child.attributes, Vector3::new(1.0, 1.0, 1.0));
-                        Matrix3::from_diagonal(diagonal)
-                    };
-                    transform = mat * transform;
-                    translate = mat * translate;
-                },
-                "translate" => {
-                    translate += read_vector3_default(&child.attributes, Vector3::new(0.0, 0.0, 0.0));
-                },
-                "rotate" => {
-                    let angle = Deg(
-                        child.attributes.get("angle").expect("no angle given for rotate")
-                        .parse().expect("could not parse angle for rotate")
-                    );
-
-                    let rotate: Matrix3<f32>;
-                    if let Some(_) = child.attributes.get("x") {
-                        rotate = Matrix3::from_angle_x(angle);
-                    } else if let Some(_) = child.attributes.get("y") {
-                        rotate = Matrix3::from_angle_y(angle);
-                    } else if let Some(_) = child.attributes.get("z") {
-                        rotate = Matrix3::from_angle_z(angle);
-                    } else {
-                        panic!("no axis given for rotate");
-                    }
-
-                    transform = rotate * transform;
-                    translate = rotate * translate;
-                },
-                _ => {}
-            }
         }
     }
+
+    let transform = load_transform(node_xml);
 
     Node {
         object: object,
         transform: transform,
-        translate: translate,
         children: children,
         name: name,
     }
@@ -135,14 +121,11 @@ fn load_material(material_xml: &Element) -> (String, Material) {
 
     match material_type.as_ref() {
         "blinn" => {
-            let diffuse = material_xml.get_child("diffuse").and_then(|diffuse_xml| {
-                read_color(&diffuse_xml.attributes)
-            }).expect("no diffuse found for <material>");
+            let diffuse_xml = material_xml.get_child("diffuse").expect("no diffuse found for <material>");
+            let diffuse = load_texture(diffuse_xml, Vector3::new(1.0, 1.0, 1.0));
 
             let specular_xml = material_xml.get_child("specular").expect("no specular found for <material>");
-            let specular = read_color(&specular_xml.attributes).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
-            let specular_value = specular_xml.attributes.get("value").expect("no value found for <specular>")
-                .parse().expect("could not parse specular value");
+            let specular = load_texture(specular_xml, Vector3::new(1.0, 1.0, 1.0));
 
             let glossiness = if let Some(glossiness_xml) = material_xml.get_child("glossiness") {
                 glossiness_xml.attributes
@@ -152,38 +135,37 @@ fn load_material(material_xml: &Element) -> (String, Material) {
                 1.0
             };
 
-            let mut reflection = Vector3::new(1.0, 1.0, 1.0);
-            let mut reflection_value = 0.0;
+            let mut reflection = Texture {
+                data: TextureData::Blank,
+                color: Vector3::new(0.0, 0.0, 0.0),
+                transform: Transform::default(),
+            };
             if let Some(reflection_xml) = material_xml.get_child("reflection") {
-                reflection = read_color(&reflection_xml.attributes).unwrap_or(reflection);
-                reflection_value = reflection_xml.attributes.get("value")
-                    .and_then(|s| s.parse().ok()).unwrap_or(reflection_value);
+                reflection = load_texture(reflection_xml, Vector3::new(1.0, 1.0, 1.0));
             }
 
-            let mut refraction = Vector3::new(1.0, 1.0, 1.0);
-            let mut refraction_value = 0.0;
+            let mut refraction = Texture {
+                data: TextureData::Blank,
+                color: Vector3::new(0.0, 0.0, 0.0),
+                transform: Transform::default(),
+            };
             let mut refraction_index = 1.0;
             if let Some(refraction_xml) = material_xml.get_child("refraction") {
-                refraction = read_color(&refraction_xml.attributes).unwrap_or(refraction);
-                refraction_value = refraction_xml.attributes.get("value")
-                    .and_then(|s| s.parse().ok()).unwrap_or(refraction_value);
+                refraction = load_texture(refraction_xml, Vector3::new(1.0, 1.0, 1.0));
                 refraction_index = refraction_xml.attributes.get("index")
                     .and_then(|s| s.parse().ok()).unwrap_or(refraction_index);
             }
 
             let absorption = material_xml.get_child("absorption").and_then(|absorption_xml| {
                 read_color(&absorption_xml.attributes)
-            }).unwrap_or(Vector3::new(1.0, 1.0, 1.0));
+            }).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
 
             (name.clone(), Material {
                 diffuse: diffuse,
                 specular: specular,
-                specular_value: specular_value,
                 glossiness: glossiness,
                 reflection: reflection,
-                reflection_value: reflection_value,
                 refraction: refraction,
-                refraction_value: refraction_value,
                 refraction_index: refraction_index,
                 absorption: absorption,
             })
@@ -310,6 +292,84 @@ fn load_obj(filename: &str) -> Geometry {
     }
 }
 
+fn load_texture(texture_xml: &Element, default_color: Color) -> Texture {
+    let value = texture_xml.attributes.get("value").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let color = value * read_color(&texture_xml.attributes).unwrap_or(default_color);
+
+    let texture_data = if let Some(texture) = texture_xml.attributes.get("texture") {
+        if texture == "checkerboard" {
+            let mut color1 = Vector3::new(0.0, 0.0, 0.0);
+            let mut color2 = Vector3::new(1.0, 1.0, 1.0);
+            if let Some(color1_xml) = texture_xml.get_child("color1") {
+                color1 = read_color(&color1_xml.attributes).unwrap_or(color1);
+            }
+            if let Some(color2_xml) = texture_xml.get_child("color2") {
+                color2 = read_color(&color2_xml.attributes).unwrap_or(color2);
+            }
+
+            TextureData::Checkerboard { color1, color2 }
+        } else {
+            load_img(texture)
+        }
+    } else {
+        TextureData::Blank
+    };
+
+    let transform = load_transform(texture_xml);
+
+    Texture {
+        data: texture_data,
+        color: color,
+        transform: transform,
+    }
+}
+
+fn load_transform(transform_xml: &Element) -> Transform {
+    let mut transform = Transform::default();
+
+    for child in &transform_xml.children {
+        match child.name.as_ref() {
+            "scale" => {
+                let mat = if let Some(scalar) = child.attributes.get("value") {
+                    let scalar: f32 = scalar.parse().expect("could not parse value for scale");
+                    scalar * Matrix3::one()
+                } else {
+                    let diagonal = read_vector3_default(&child.attributes, Vector3::new(1.0, 1.0, 1.0));
+                    Matrix3::from_diagonal(diagonal)
+                };
+                transform.transform = mat * transform.transform;
+                transform.translate = mat * transform.translate;
+            },
+            "translate" => {
+                transform.translate += read_vector3_default(&child.attributes, Vector3::new(0.0, 0.0, 0.0));
+            },
+            "rotate" => {
+                let angle = Deg(
+                    child.attributes.get("angle").expect("no angle given for rotate")
+                    .parse().expect("could not parse angle for rotate")
+                );
+
+                let rotate: Matrix3<f32>;
+                if let Some(_) = child.attributes.get("x") {
+                    rotate = Matrix3::from_angle_x(angle);
+                } else if let Some(_) = child.attributes.get("y") {
+                    rotate = Matrix3::from_angle_y(angle);
+                } else if let Some(_) = child.attributes.get("z") {
+                    rotate = Matrix3::from_angle_z(angle);
+                } else {
+                    rotate = Matrix3::from_angle_z(angle);
+                }
+
+                transform.transform = rotate * transform.transform;
+                transform.translate = rotate * transform.translate;
+            },
+            _ => {}
+        }
+    }
+
+    transform
+}
+
 fn read_vector3(attrs: &HashMap<String, String>) -> Vector3<f32> {
     read_vector3_default(attrs, Vector3::new(0.0, 0.0, 0.0))
 }
@@ -332,4 +392,12 @@ fn read_color(attrs: &HashMap<String, String>) -> Option<Color> {
     } else {
         None
     }
+}
+
+fn load_img(filename: &str) -> TextureData {
+    let decoder = png::Decoder::new(File::open(filename).unwrap());
+    let (info, mut reader) = decoder.read_info().unwrap();
+    let mut buf = vec![0; info.buffer_size()];
+    reader.next_frame(&mut buf).unwrap();
+    TextureData::Image { pixels: buf, width: info.width as usize, height: info.height as usize }
 }

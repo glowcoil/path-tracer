@@ -53,7 +53,7 @@ fn main() {
         let p = a + ((x as f32) + 0.5) * pixel_width * right - ((y as f32) + 0.5) * pixel_height * camera.up;
         let dir = (p - camera.pos).normalize();
 
-        let color: [u8; 4] = color_as_u8_array(scene.cast(camera.pos, dir, 3));
+        let color: [u8; 4] = color_as_u8_array(scene.cast(camera.pos, dir, x as f32 / camera.img_width as f32, y as f32 / camera.img_height as f32, 3));
 
         pixel.copy_from_slice(&color);
     });

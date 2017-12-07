@@ -5,6 +5,8 @@ use bvh::*;
 
 use self::cgmath::{Vector3, InnerSpace};
 
+use std::f32::consts;
+
 #[derive(Debug)]
 pub enum Geometry {
     Sphere,
@@ -58,6 +60,7 @@ impl Geometry {
                         Some(HitInfo {
                             z: t,
                             pos: hit_pos,
+                            uv: Vector3::new(0.5 + (normal.y).atan2(normal.x) / (2.0 * consts::PI), 0.5 - (-normal.z).asin() / consts::PI, 0.0),
                             normal: normal,
                             side: side,
                         })
@@ -76,6 +79,7 @@ impl Geometry {
                         Some(HitInfo {
                             z: t,
                             pos: p,
+                            uv: Vector3::new(0.5 + 0.5 * p.x, 0.5 + 0.5 * p.y, 0.0),
                             normal: Vector3::new(0.0, 0.0, 1.0),
                             side: if pos.z > 0.0 { Side::Front } else { Side::Back },
                         })
@@ -120,6 +124,11 @@ impl Mesh {
         (1.0 - u - v) * self.normals[points.0] + u * self.normals[points.1] + v * self.normals[points.2]
     }
 
+    fn get_texture_vertex(&self, face: usize, u: f32, v: f32) -> Vector3<f32> {
+        let points = self.texture_triangles[face];
+        (1.0 - u - v) * self.texture_vertices[points.0] + u * self.texture_vertices[points.1] + v * self.texture_vertices[points.2]
+    }
+
     fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<HitInfo> {
         let mut nearest: Option<HitInfo> = None;
 
@@ -138,6 +147,7 @@ impl Mesh {
                 nearest = Some(HitInfo {
                     z: t,
                     pos: self.get_point(i, u, v),
+                    uv: self.get_texture_vertex(i, u, v),
                     normal: self.get_normal(i, u, v),
                     side: side,
                 })
