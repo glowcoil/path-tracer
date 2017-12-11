@@ -230,7 +230,7 @@ impl Scene {
                 Vector3::new(0.0, 0.0, 0.0)
             };
 
-            diffuse_color + (1.0 + ar) * (specular_color + reflected.mul_element_wise(reflection)) + (1.0 - ar) * refracted.mul_element_wise(refraction)
+            diffuse_color + specular_color + (1.0 + ar) * reflected.mul_element_wise(reflection) + (1.0 - ar) * refracted.mul_element_wise(refraction)
         } else {
             diffuse_color + specular_color
         }
@@ -373,13 +373,6 @@ impl Texture {
 
 impl TextureData {
     fn sample(&self, point: Vector3<f32>) -> Color {
-        // if let TextureData::Image { ref pixels, width, height } = *self {
-        //     for pixel in pixels.iter() {
-        //         println!("{}", pixel);
-        //     }
-        // }
-
-        // return Vector3::new(1.0, 1.0, 1.0);
         match *self {
             TextureData::Blank => Vector3::new(1.0, 1.0, 1.0),
             TextureData::Image { ref pixels, width, height } => {
@@ -456,4 +449,18 @@ pub fn unit_clamp(point: Vector3<f32>) -> Vector3<f32> {
         z += 1.0;
     }
     Vector3::new(x, y, z)
+}
+
+pub fn halton(index: i32, base: i32) -> f32 {
+    let mut r = 0.0;
+    let mut f = 1.0;
+
+    let mut i = index;
+    while i > 0 {
+        f /= base as f32;
+        r += f * (i % base) as f32;
+        i /= base;
+    }
+
+    r
 }

@@ -125,14 +125,14 @@ fn load_material(material_xml: &Element) -> (String, Material) {
             let diffuse = load_texture(diffuse_xml, Vector3::new(1.0, 1.0, 1.0));
 
             let specular_xml = material_xml.get_child("specular").expect("no specular found for <material>");
-            let specular = load_texture(specular_xml, Vector3::new(1.0, 1.0, 1.0));
+            let specular = load_texture(specular_xml, Vector3::new(0.7, 0.7, 0.7));
 
             let glossiness = if let Some(glossiness_xml) = material_xml.get_child("glossiness") {
                 glossiness_xml.attributes
                     .get("value").expect("no value found for <glossiness>")
                     .parse().expect("could not parse glossiness value")
             } else {
-                1.0
+                20.0
             };
 
             let mut reflection = Texture {
@@ -293,8 +293,13 @@ fn load_obj(filename: &str) -> Geometry {
 }
 
 fn load_texture(texture_xml: &Element, default_color: Color) -> Texture {
-    let value = texture_xml.attributes.get("value").and_then(|s| s.parse().ok()).unwrap_or(1.0);
-    let color = value * read_color(&texture_xml.attributes).unwrap_or(default_color);
+    let maybe_value = texture_xml.attributes.get("value");
+    let maybe_color = read_color(&texture_xml.attributes);
+    let color = if maybe_value.is_some() || maybe_color.is_some() {
+        maybe_value.and_then(|s| s.parse().ok()).unwrap_or(1.0) * maybe_color.unwrap_or(Vector3::new(1.0, 1.0, 1.0))
+    } else {
+        default_color
+    };
 
     let texture_data = if let Some(texture) = texture_xml.attributes.get("texture") {
         if texture == "checkerboard" {
