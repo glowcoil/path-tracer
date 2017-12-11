@@ -1,5 +1,5 @@
 [package]
-name = "prj8"
+name = "prj9"
 version = "0.1.0"
 authors = ["Micah Johnston <micah@glowcoil.com>"]
 
@@ -9,3 +9,4 @@ cgmath = "0.15.0"
 png = "0.9.0"
 rayon = "0.8.2"
 wavefront_obj = "5.1.0"
+rand = "0.3.16"

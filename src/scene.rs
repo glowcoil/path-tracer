@@ -76,6 +76,8 @@ pub struct Camera {
     pub fov: f32,
     pub img_width: u32,
     pub img_height: u32,
+    pub focaldist: f32,
+    pub dof: f32,
 }
 
 pub struct HitInfo {
@@ -107,6 +109,8 @@ impl Default for Camera {
             fov: 40.0,
             img_width: 800,
             img_height: 600,
+            focaldist: 1.0,
+            dof: 0.0,
         }
     }
 }

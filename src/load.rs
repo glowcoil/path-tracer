@@ -96,7 +96,7 @@ fn load_node(node_xml: &Element) -> Node {
         }
     });
 
-    let name = node_xml.attributes.get("name").expect("no name given for object").clone();
+    let name = node_xml.attributes.get("name").map(|name| name.clone()).unwrap_or("".to_string());
 
     let mut children: Vec<Node> = Vec::new();
     for child in &node_xml.children {
@@ -225,6 +225,12 @@ fn load_camera(camera_xml: &Element) -> Camera {
     camera.img_height = camera_xml.get_child("height").expect("no <height> tag found in <camera>")
         .attributes.get("value").expect("no value attribute found on <height> tag")
         .parse().expect("could not parse camera height");
+    camera.focaldist = camera_xml.get_child("focaldist")
+        .and_then(|focaldist_xml| focaldist_xml.attributes.get("value"))
+        .and_then(|focaldist| focaldist.parse().ok()).unwrap_or(camera.focaldist);
+    camera.dof = camera_xml.get_child("dof")
+        .and_then(|dof_xml| dof_xml.attributes.get("value"))
+        .and_then(|dof| dof.parse().ok()).unwrap_or(camera.dof);
 
     /* make sure camera.up is orthogonal to camera.dir */
     camera.up = (camera.dir.cross(camera.up)).cross(camera.dir);
