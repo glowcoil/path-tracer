@@ -140,8 +140,11 @@ fn load_material(material_xml: &Element) -> (String, Material) {
                 color: Vector3::new(0.0, 0.0, 0.0),
                 transform: Transform::default(),
             };
+            let mut reflection_glossiness = 0.0;
             if let Some(reflection_xml) = material_xml.get_child("reflection") {
                 reflection = load_texture(reflection_xml, Vector3::new(1.0, 1.0, 1.0));
+                reflection_glossiness = reflection_xml.attributes.get("glossiness")
+                    .and_then(|s| s.parse().ok()).unwrap_or(reflection_glossiness);
             }
 
             let mut refraction = Texture {
@@ -150,10 +153,13 @@ fn load_material(material_xml: &Element) -> (String, Material) {
                 transform: Transform::default(),
             };
             let mut refraction_index = 1.0;
+            let mut refraction_glossiness = 0.0;
             if let Some(refraction_xml) = material_xml.get_child("refraction") {
                 refraction = load_texture(refraction_xml, Vector3::new(1.0, 1.0, 1.0));
                 refraction_index = refraction_xml.attributes.get("index")
                     .and_then(|s| s.parse().ok()).unwrap_or(refraction_index);
+                refraction_glossiness = refraction_xml.attributes.get("glossiness")
+                    .and_then(|s| s.parse().ok()).unwrap_or(refraction_glossiness);
             }
 
             let absorption = material_xml.get_child("absorption").and_then(|absorption_xml| {
@@ -165,7 +171,9 @@ fn load_material(material_xml: &Element) -> (String, Material) {
                 specular: specular,
                 glossiness: glossiness,
                 reflection: reflection,
+                reflection_glossiness: reflection_glossiness,
                 refraction: refraction,
+                refraction_glossiness: refraction_glossiness,
                 refraction_index: refraction_index,
                 absorption: absorption,
             })
@@ -194,8 +202,12 @@ fn load_light(light_xml: &Element) -> Light {
                 .normalize())
         },
         "point" => {
-            LightType::Point(read_vector3(&light_xml.get_child("position")
-                .expect("no position given for positional light").attributes))
+            let position = read_vector3(&light_xml.get_child("position")
+                .expect("no position given for positional light").attributes);
+            let size = light_xml.get_child("size")
+                .and_then(|size_xml| size_xml.attributes.get("value"))
+                .and_then(|size| size.parse().ok()).unwrap_or(0.0);
+            LightType::Point { position: position, size: size }
         },
         _ => {
             panic!("unknown light type");

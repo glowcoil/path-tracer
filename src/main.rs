@@ -28,8 +28,8 @@ const R_THRESHOLD: f32 = 0.4;
 const G_THRESHOLD: f32 = 0.3;
 const B_THRESHOLD: f32 = 0.6;
 
-const INITIAL_SAMPLES: i32 = 4;
-const MAX_SAMPLES: i32 = 64;
+const INITIAL_SAMPLES: i32 = 2;
+const MAX_SAMPLES: i32 = 8;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -105,7 +105,7 @@ fn main() {
 
         let total: Color = samples.iter().sum();
         let color: [u8; 4] = color_as_u8_array(total / num_samples as f32);
-        // let brightness = iters as f32 / 2.0;
+        // let brightness = 255.0 * iters as f32 / 2.0 as f32;
         // let color: [u8; 4] = color_as_u8_array(Vector3::new(brightness, brightness, brightness));
 
         pixel.copy_from_slice(&color);
