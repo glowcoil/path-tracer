@@ -28,8 +28,8 @@ const R_THRESHOLD: f32 = 0.4;
 const G_THRESHOLD: f32 = 0.3;
 const B_THRESHOLD: f32 = 0.6;
 
-const INITIAL_SAMPLES: i32 = 2;
-const MAX_SAMPLES: i32 = 8;
+const INITIAL_SAMPLES: i32 = 4;
+const MAX_SAMPLES: i32 = 4;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -57,6 +57,9 @@ fn main() {
     img.par_chunks_mut(4).enumerate().for_each(|(i, pixel)| {
         let x = (i as u32) % camera.img_width;
         let y = (i as u32) / camera.img_width;
+        if x == 0 {
+            println!("{}", y);
+        }
 
         /* top-left corner of the current pixel */
         let top_left = a + x as f32 * pixel_width * right - y as f32 * pixel_height * camera.up;
@@ -79,7 +82,7 @@ fn main() {
                 let eye: Vector3<f32> = camera.pos + eye_x_offset * camera.dof * right + eye_y_offset * camera.dof * camera.up;
 
                 let dir = (p - eye).normalize();
-                scene.cast(eye, dir, (x as f32 + x_offset) / camera.img_width as f32, (y as f32 + y_offset) / camera.img_height as f32, 3)
+                scene.cast(eye, dir, (x as f32 + x_offset) / camera.img_width as f32, (y as f32 + y_offset) / camera.img_height as f32, 1)
             }).collect();
 
             samples.append(&mut new_samples);

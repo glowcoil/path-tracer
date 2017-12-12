@@ -34,6 +34,7 @@ pub struct Material {
     pub diffuse: Texture,
     pub specular: Texture,
     pub glossiness: f32,
+    pub emission: Color,
     pub reflection: Texture,
     pub reflection_glossiness: f32,
     pub refraction: Texture,
@@ -121,9 +122,10 @@ impl Default for Camera {
 pub const BIAS: f32 = 0.1;
 pub const EPSILON: f32 = 1.0e-8;
 
-pub const SHADOW_RAYS: u32 = 1;
-pub const REFLECTION_RAYS: u32 = 1;
-pub const REFRACTION_RAYS: u32 = 1;
+pub const SHADOW_RAYS: u32 = 4;
+pub const REFLECTION_RAYS: u32 = 4;
+pub const REFRACTION_RAYS: u32 = 4;
+pub const GI_RAYS: u32 = 16;
 
 impl Scene {
     pub fn cast(&self, pos: Vector3<f32>, dir: Vector3<f32>, x: f32, y: f32, bounces: i32) -> Color {
@@ -195,6 +197,19 @@ impl Scene {
 
             diffuse_color += light_color.mul_element_wise(diffuse);
             specular_color += light_color.mul_element_wise(specular);
+        }
+
+        if bounces > 0 {
+            let mut gi = Vector3::new(0.0, 0.0, 0.0);
+            let rays = random_hemisphere_rays(hit_info.normal, GI_RAYS);
+            for ray in rays {
+                if let Some((color, distance)) = self.cast_distance(hit_info.pos + BIAS * ray, ray, 0) {
+                    gi += hit_info.normal.dot(ray) * color;// / (distance * distance);
+                } else {
+                    gi += self.environment.sample_environment(ray);
+                }
+            }
+            diffuse_color += diffuse.mul_element_wise(gi) / GI_RAYS as f32;
         }
 
         /* reflection and refraction */
@@ -496,6 +511,30 @@ fn random_rotation(vec: Vector3<f32>, max_angle: f32) -> Vector3<f32> {
     //     println!("alert");
     // }
     output.normalize()
+}
+
+fn random_hemisphere_rays(vec: Vector3<f32>, n: u32) -> Vec<Vector3<f32>> {
+    let x_abs = vec.x.abs(); let y_abs = vec.y.abs(); let z_abs = vec.z.abs();
+    let smallest_axis = if x_abs < y_abs && x_abs < z_abs {
+        Vector3::unit_x()
+    } else if y_abs < z_abs {
+        Vector3::unit_y()
+    } else {
+        Vector3::unit_z()
+    };
+    let u = vec.cross(smallest_axis).normalize();
+    let v = vec.cross(u).normalize();
+
+    let regions = (n as f32).sqrt() as u32;
+    let mut vectors: Vec<Vector3<f32>> = Vec::new();
+    for i in 0..n {
+        let phi = (((i % regions) as f32 / regions as f32) + rand::random::<f32>() / regions as f32) * consts::PI / 2.0;
+        let z = phi.cos();
+        let theta = (((i / regions) as f32 / regions as f32) + rand::random::<f32>() / regions as f32) * 2.0 * consts::PI;
+        vectors.push((z * vec + phi.sin() * (u * theta.cos() + v * theta.sin())).normalize());
+    }
+
+    vectors
 }
 
 pub fn halton(index: i32, base: i32) -> f32 {

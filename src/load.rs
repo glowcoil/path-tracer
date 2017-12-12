@@ -121,8 +121,14 @@ fn load_material(material_xml: &Element) -> (String, Material) {
 
     match material_type.as_ref() {
         "blinn" => {
-            let diffuse_xml = material_xml.get_child("diffuse").expect("no diffuse found for <material>");
-            let diffuse = load_texture(diffuse_xml, Vector3::new(1.0, 1.0, 1.0));
+            let mut diffuse = Texture {
+                data: TextureData::Blank,
+                color: Vector3::new(0.5, 0.5, 0.5),
+                transform: Transform::default(),
+            };
+            if let Some(diffuse_xml) = material_xml.get_child("diffuse") {
+                diffuse = load_texture(diffuse_xml, Vector3::new(1.0, 1.0, 1.0));
+            }
 
             let specular_xml = material_xml.get_child("specular").expect("no specular found for <material>");
             let specular = load_texture(specular_xml, Vector3::new(0.7, 0.7, 0.7));
@@ -134,6 +140,16 @@ fn load_material(material_xml: &Element) -> (String, Material) {
             } else {
                 20.0
             };
+
+            let emission = material_xml.get_child("emission").map(|emission_xml| {
+                let maybe_value = emission_xml.attributes.get("value");
+                let maybe_color = read_color(&emission_xml.attributes);
+                if maybe_value.is_some() || maybe_color.is_some() {
+                    maybe_value.and_then(|s| s.parse().ok()).unwrap_or(1.0) * maybe_color.unwrap_or(Vector3::new(1.0, 1.0, 1.0))
+                } else {
+                    Vector3::new(0.0, 0.0, 0.0)
+                }
+            }).unwrap_or(Vector3::new(0.0, 0.0, 0.0));
 
             let mut reflection = Texture {
                 data: TextureData::Blank,
@@ -170,6 +186,7 @@ fn load_material(material_xml: &Element) -> (String, Material) {
                 diffuse: diffuse,
                 specular: specular,
                 glossiness: glossiness,
+                emission: emission,
                 reflection: reflection,
                 reflection_glossiness: reflection_glossiness,
                 refraction: refraction,
