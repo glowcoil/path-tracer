@@ -458,10 +458,12 @@ impl TextureData {
     }
 }
 
+const GAMMA: f32 = 1.0/2.2;
+
 pub fn color_as_u8_array(color: Color) -> [u8; 4] {
-    [(color.x * 255.0).max(0.0).min(255.0) as u8,
-     (color.y * 255.0).max(0.0).min(255.0) as u8,
-     (color.z * 255.0).max(0.0).min(255.0) as u8,
+    [(color.x.powf(GAMMA) * 255.0).max(0.0).min(255.0) as u8,
+     (color.y.powf(GAMMA) * 255.0).max(0.0).min(255.0) as u8,
+     (color.z.powf(GAMMA) * 255.0).max(0.0).min(255.0) as u8,
      255]
 }
 
