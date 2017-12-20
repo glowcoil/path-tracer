@@ -203,7 +203,7 @@ impl Scene {
             let mut gi = Vector3::new(0.0, 0.0, 0.0);
             let rays = random_hemisphere_rays(hit_info.normal, GI_RAYS);
             for ray in rays {
-                if let Some((color, distance)) = self.cast_distance(hit_info.pos + BIAS * ray, ray, 0) {
+                if let Some((color, distance)) = self.cast_distance(hit_info.pos + BIAS * ray, ray, bounces - 1) {
                     gi += hit_info.normal.dot(ray) * color;// / (distance * distance);
                 } else {
                     gi += self.environment.sample_environment(ray);

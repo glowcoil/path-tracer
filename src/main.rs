@@ -82,7 +82,7 @@ fn main() {
                 let eye: Vector3<f32> = camera.pos + eye_x_offset * camera.dof * right + eye_y_offset * camera.dof * camera.up;
 
                 let dir = (p - eye).normalize();
-                scene.cast(eye, dir, (x as f32 + x_offset) / camera.img_width as f32, (y as f32 + y_offset) / camera.img_height as f32, 1)
+                scene.cast(eye, dir, (x as f32 + x_offset) / camera.img_width as f32, (y as f32 + y_offset) / camera.img_height as f32, 3)
             }).collect();
 
             samples.append(&mut new_samples);
