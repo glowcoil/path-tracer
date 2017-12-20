@@ -119,7 +119,7 @@ impl Default for Camera {
     }
 }
 
-pub const BIAS: f32 = 0.1;
+pub const BIAS: f32 = 0.01;
 pub const EPSILON: f32 = 1.0e-8;
 
 pub const SHADOW_RAYS: u32 = 4;
