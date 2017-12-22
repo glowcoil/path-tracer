@@ -122,161 +122,65 @@ impl Default for Camera {
 pub const BIAS: f32 = 0.01;
 pub const EPSILON: f32 = 1.0e-8;
 
-pub const SHADOW_RAYS: u32 = 4;
-pub const REFLECTION_RAYS: u32 = 4;
-pub const REFRACTION_RAYS: u32 = 4;
-pub const GI_RAYS: u32 = 16;
-
 impl Scene {
-    pub fn cast(&self, pos: Vector3<f32>, dir: Vector3<f32>, x: f32, y: f32, bounces: i32) -> Color {
-        if let Some((color, _)) = self.cast_distance(pos, dir, bounces) {
-            color
-        } else {
-            self.background.sample(Vector3::new(x, y, 0.0))
-        }
+    pub fn sample(&self, pos: Vector3<f32>, dir: Vector3<f32>, x: f32, y: f32) -> Color {
+        self.cast(pos, dir, 1.0).unwrap_or_else(|| self.background.sample(Vector3::new(x, y, 0.0)))
     }
 
-    pub fn cast_distance(&self, pos: Vector3<f32>, dir: Vector3<f32>, bounces: i32) -> Option<(Color, f32)> {
-        if let Some((hit_info, node)) = self.intersect(pos, dir) {
+    pub fn cast(&self, pos: Vector3<f32>, dir: Vector3<f32>, weight: f32) -> Option<Color> {
+        let result = self.intersect(pos, dir).map(|(hit_info, node)| {
             let material = self.materials.get(&node.object.as_ref().unwrap().material[..])
                 .expect("material does not exist for object");
 
-            Some((self.shade(pos, dir, &hit_info, material, bounces), hit_info.z))
-        } else {
-            None
-        }
-    }
+            let diffuse = material.diffuse.sample(hit_info.uv);
+            let reflection = material.reflection.sample(hit_info.uv);
+            let refraction = material.refraction.sample(hit_info.uv);
 
-    pub fn shade(&self, pos: Vector3<f32>, dir: Vector3<f32>, hit_info: &HitInfo, material: &Material, bounces: i32) -> Color {
-        let diffuse = material.diffuse.sample(hit_info.uv);
-        let specular = material.specular.sample(hit_info.uv);
-        let reflection = material.reflection.sample(hit_info.uv);
-        let refraction = material.refraction.sample(hit_info.uv);
-
-        let mut diffuse_color = Vector3::zero();
-        let mut specular_color = Vector3::zero();
-
-        for light in self.lights.iter() {
-            let l: Vector3<f32>;
-            let shadow: f32;
-            match light.light_type {
-                LightType::Ambient => {
-                    diffuse_color += light.intensity * light.color.mul_element_wise(diffuse);
-                    continue;
-                },
-                LightType::Directional(direction) => {
-                    l = (-direction).normalize();
-                    shadow = 1.0;
-                },
-                LightType::Point { position, size } => {
-                    shadow = (0..SHADOW_RAYS).map(|_| {
-                        let offset_position = position + size * Vector3::new(rand::random(), rand::random(), rand::random());
-                        let ray = (offset_position - hit_info.pos).normalize();
-                        match self.intersect(hit_info.pos + BIAS * ray, ray) {
-                            Some((blocking_hit_info, _)) => if blocking_hit_info.z > (offset_position - hit_info.pos).magnitude() {
-                                1.0
-                            } else  {
-                                0.0
-                            },
-                            None => 1.0
-                        }
-                    }).sum::<f32>() / SHADOW_RAYS as f32;
-
-                    l = (position - hit_info.pos).normalize();
-                },
-            };
-
-            let v = (pos - hit_info.pos).normalize();
-            let half = (l + v).normalize();
-            let n_dot_l = hit_info.normal.dot(l).max(0.0).min(1.0);
-            let n_dot_h = hit_info.normal.dot(half).max(0.0).min(1.0);
-
-            let specular = n_dot_h.powf(material.glossiness) * specular;
-
-            let light_color = shadow * light.intensity * n_dot_l * light.color;
-
-            diffuse_color += light_color.mul_element_wise(diffuse);
-            specular_color += light_color.mul_element_wise(specular);
-        }
-
-        if bounces > 0 {
-            let mut gi = Vector3::new(0.0, 0.0, 0.0);
-            let rays = random_hemisphere_rays(hit_info.normal, GI_RAYS);
-            for ray in rays {
-                if let Some((color, distance)) = self.cast_distance(hit_info.pos + BIAS * ray, ray, bounces - 1) {
-                    gi += hit_info.normal.dot(ray) * color;// / (distance * distance);
-                } else {
-                    gi += self.environment.sample_environment(ray);
-                }
-            }
-            diffuse_color += diffuse.mul_element_wise(gi) / GI_RAYS as f32;
-        }
-
-        /* reflection and refraction */
-        if (!reflection.is_zero() || !refraction.is_zero()) && bounces > 0 {
             let normal = match hit_info.side {
                 Side::Back => -hit_info.normal,
                 Side::Front => hit_info.normal,
             };
 
-            let reflected = (0..REFLECTION_RAYS).map(|_| {
-                let mut reflected_ray = reflect_ray(-dir, normal);
-                if material.reflection_glossiness > 0.0 {
-                    reflected_ray = random_rotation(reflected_ray, material.reflection_glossiness);
-                }
-                if let Some((color, _)) = self.cast_distance(hit_info.pos + BIAS * reflected_ray, reflected_ray, bounces - 1) {
-                    color
-                } else {
-                    self.environment.sample_environment(reflected_ray)
-                }
-            }).sum::<Vector3<f32>>() / REFLECTION_RAYS as f32;
-
+            /* Schlick's approximation for Fresnel reflectance */
             let (n1, n2) = match hit_info.side {
                 Side::Back => (material.refraction_index, 1.0),
                 Side::Front => (1.0, material.refraction_index)
             };
-
-            /* Schlick's approximation */
             let r0 = ((n1 - n2) / (n1 + n2)).powi(2);
-            let mut ar = r0 + (1.0 - r0) * (1.0 - normal.dot(-dir)).powi(5);
+            let ar = r0 + (1.0 - r0) * (1.0 - normal.dot(-dir)).powi(5);
 
-            let refracted = (0..REFRACTION_RAYS).map(|_| {
-                if let Some(mut refracted_ray) = refract_ray(-dir, normal, n1, n2) {
-                    if material.refraction_glossiness > 0.0 {
-                        refracted_ray = random_rotation(refracted_ray, material.refraction_glossiness);
-                    }
-                    if let Some((color, distance)) = self.cast_distance(hit_info.pos + BIAS * refracted_ray, refracted_ray, bounces - 1) {
-                        if hit_info.side == Side::Front && !material.absorption.is_zero() {
-                            let mut absorb = -distance * material.absorption;
-                            absorb.x = absorb.x.exp();
-                            absorb.y = absorb.y.exp();
-                            absorb.z = absorb.z.exp();
-                            color.mul_element_wise(absorb)
-                        } else {
-                            color
-                        }
-                    } else {
-                        self.environment.sample_environment(refracted_ray.normalize())
-                    }
-                } else {
-                    ar = 1.0;
-                    Vector3::new(0.0, 0.0, 0.0)
-                }
-            }).sum::<Vector3<f32>>() / REFRACTION_RAYS as f32;
+            let p_diffuse = (diffuse.x + diffuse.y + diffuse.z) / 3.0;
+            let p_reflection = (1.0 + ar) * (reflection.x + reflection.y + reflection.z) / 3.0;
+            let p_refraction = (1.0 - ar) * (refraction.x + refraction.y + refraction.z) / 3.0;
 
-            if ar == 1.0 && material.refraction_index == 2.0 {
-                // println!("{:?}", hit_info.side);
-                // println!("{:?}", self.cast_distance(hit_info.pos + BIAS * reflected_ray, reflected_ray, bounces - 1));
+            let p_range = p_diffuse + p_reflection + p_refraction;
+
+            let mut color = material.emission;
+
+            /* Russian Roulette */
+            if p_range == 0.0 || rand::random::<f32>() > weight {
+                return color;
             }
 
-            diffuse_color + specular_color + reflected.mul_element_wise(reflection) + ar * reflected.mul_element_wise(refraction) + (1.0 - ar) * refracted.mul_element_wise(refraction)
-        } else {
-            diffuse_color + specular_color
-        }
+            let rnd = rand::random::<f32>() * p_range;
+            if rnd < p_diffuse {
+                let new_dir = random_rotation(normal, consts::PI / 2.0);
+                color += normal.dot(new_dir) * diffuse.mul_element_wise(self.cast(hit_info.pos + BIAS * new_dir, new_dir, weight * p_diffuse)
+                    .unwrap_or_else(|| self.environment.sample_environment(new_dir))) / p_diffuse;
+            } else if rnd < p_diffuse + p_reflection {
+                let new_dir = random_rotation(reflect_ray(-dir, normal), material.reflection_glossiness);
+                color += normal.dot(new_dir) * reflection.mul_element_wise(self.cast(hit_info.pos + BIAS * new_dir, new_dir, weight * p_reflection)
+                    .unwrap_or_else(|| self.environment.sample_environment(new_dir))) / p_reflection;
+            } else if rnd < p_diffuse + p_reflection + p_refraction {
+                let new_dir = random_rotation(refract_ray(-dir, normal, n1, n2).unwrap_or_else(|| reflect_ray(-dir, normal)), material.refraction_glossiness);
+                color += normal.dot(new_dir) * refraction.mul_element_wise(self.cast(hit_info.pos + BIAS * new_dir, new_dir, weight * p_refraction)
+                    .unwrap_or_else(|| self.environment.sample_environment(new_dir))) / p_refraction;
+            }
 
-        // hit_info.normal / 2.0 + Vector3::new(0.5, 0.5, 0.5)
-        // (1.0 - ((hit_info.z - 20.0) / 70.0)) * Vector3::new(1.0, 1.0, 1.0)
-        // (1.0 - ((hit_info.pos - pos).magnitude() / 100.0)) * Vector3::new(1.0, 1.0, 1.0)
+            color
+        });
+
+        result
     }
 
     pub fn intersect(&self, pos: Vector3<f32>, dir: Vector3<f32>) -> Option<(HitInfo, &Node)> {
@@ -393,15 +297,6 @@ impl Texture {
     }
 
     fn sample_environment(&self, dir: Vector3<f32>) -> Color {
-        // let z = (-dir.z).asin() / consts::PI + 0.5;
-        // let mut y = dir.x;
-        // let mut x = dir.y;
-        // let x_plus_y = dir.x.abs() + dir.y.abs();
-        // if x_plus_y > 0.0 {
-        //     x /= x_plus_y;
-        //     y /= x_plus_y;
-        // }
-        // self.sample(Vector3::new(0.5, 0.5, 0.0) + z * (x * Vector3::new(-0.5, 0.5, 0.0) + y * Vector3::new(0.5, 0.5, 0.0)))
         self.sample(Vector3::new(0.5 + (dir.y).atan2(dir.x) / (2.0 * consts::PI), 0.5 - (-dir.z).asin() / consts::PI, 0.0))
     }
 
@@ -505,38 +400,10 @@ fn random_rotation(vec: Vector3<f32>, max_angle: f32) -> Vector3<f32> {
     let v = vec.cross(u).normalize();
 
     let z_min = max_angle.cos();
-    let random_height: f32 = rand::random();
-    let random_angle: f32 = rand::random();
-    let phi = random_angle * 2.0 * consts::PI;
-    let output = vec * (z_min + random_height * (1.0 - z_min)) + max_angle.sin() * (phi.cos() * u + phi.sin() * v);
-    // if vec.dot(output) < 0.0 {
-    //     println!("alert");
-    // }
+    let z = z_min + rand::random::<f32>() * (1.0 - z_min);
+    let theta = rand::random::<f32>() * 2.0 * consts::PI;
+    let output = vec * z + z.asin().cos() * (theta.cos() * u + theta.sin() * v);
     output.normalize()
-}
-
-fn random_hemisphere_rays(vec: Vector3<f32>, n: u32) -> Vec<Vector3<f32>> {
-    let x_abs = vec.x.abs(); let y_abs = vec.y.abs(); let z_abs = vec.z.abs();
-    let smallest_axis = if x_abs < y_abs && x_abs < z_abs {
-        Vector3::unit_x()
-    } else if y_abs < z_abs {
-        Vector3::unit_y()
-    } else {
-        Vector3::unit_z()
-    };
-    let u = vec.cross(smallest_axis).normalize();
-    let v = vec.cross(u).normalize();
-
-    let regions = (n as f32).sqrt() as u32;
-    let mut vectors: Vec<Vector3<f32>> = Vec::new();
-    for i in 0..n {
-        let phi = (((i % regions) as f32 / regions as f32) + rand::random::<f32>() / regions as f32) * consts::PI / 2.0;
-        let z = phi.cos();
-        let theta = (((i / regions) as f32 / regions as f32) + rand::random::<f32>() / regions as f32) * 2.0 * consts::PI;
-        vectors.push((z * vec + phi.sin() * (u * theta.cos() + v * theta.sin())).normalize());
-    }
-
-    vectors
 }
 
 pub fn halton(index: i32, base: i32) -> f32 {
