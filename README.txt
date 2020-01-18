@@ -1,7 +1,5 @@
-to build, first install rust:
+path tracer written for a course during undergrad.
 
-    https://www.rustup.rs/
+invoke with:
 
-then run:
-
-    cargo run --release scene.xml image.png
+    cargo run --release -- scene.xml out.png

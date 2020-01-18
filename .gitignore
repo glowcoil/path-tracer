@@ -1,7 +1,5 @@
 target/
 **/*.rs.bk
 *.png
-*.xml
 .DS_Store
 Cargo.lock
-*.obj
