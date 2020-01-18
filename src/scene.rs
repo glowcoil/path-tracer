@@ -150,8 +150,8 @@ impl Scene {
             let ar = r0 + (1.0 - r0) * (1.0 - normal.dot(-dir)).powi(5);
 
             let p_diffuse = (diffuse.x + diffuse.y + diffuse.z) / 3.0;
-            let p_reflection = (1.0 + ar) * (reflection.x + reflection.y + reflection.z) / 3.0;
             let p_refraction = (1.0 - ar) * (refraction.x + refraction.y + refraction.z) / 3.0;
+            let p_reflection = (1.0 + ar) * (reflection.x + reflection.y + reflection.z) / 3.0;
 
             let p_range = p_diffuse + p_reflection + p_refraction;
 
@@ -162,9 +162,13 @@ impl Scene {
                 return color;
             }
 
-            let rnd = rand::random::<f32>() * p_range;
+            let p_diffuse = p_diffuse / p_range;
+            let p_reflection = p_reflection / p_range;
+            let p_refraction = p_refraction / p_range;
+
+            let rnd = rand::random::<f32>();
             if rnd < p_diffuse {
-                let new_dir = random_rotation(normal, consts::PI / 2.0);
+                let new_dir = random_hemisphere_sample(normal);
                 color += normal.dot(new_dir) * diffuse.mul_element_wise(self.cast(hit_info.pos + BIAS * new_dir, new_dir, weight * p_diffuse)
                     .unwrap_or_else(|| self.environment.sample_environment(new_dir))) / p_diffuse;
             } else if rnd < p_diffuse + p_reflection {
@@ -401,6 +405,24 @@ fn random_rotation(vec: Vector3<f32>, max_angle: f32) -> Vector3<f32> {
 
     let z_min = max_angle.cos();
     let z = z_min + rand::random::<f32>() * (1.0 - z_min);
+    let theta = rand::random::<f32>() * 2.0 * consts::PI;
+    let output = vec * z + z.asin().cos() * (theta.cos() * u + theta.sin() * v);
+    output.normalize()
+}
+
+fn random_hemisphere_sample(vec: Vector3<f32>) -> Vector3<f32> {
+    let x_abs = vec.x.abs(); let y_abs = vec.y.abs(); let z_abs = vec.z.abs();
+    let smallest_axis = if x_abs < y_abs && x_abs < z_abs {
+        Vector3::unit_x()
+    } else if y_abs < z_abs {
+        Vector3::unit_y()
+    } else {
+        Vector3::unit_z()
+    };
+    let u = vec.cross(smallest_axis).normalize();
+    let v = vec.cross(u).normalize();
+
+    let z = rand::random::<f32>();
     let theta = rand::random::<f32>() * 2.0 * consts::PI;
     let output = vec * z + z.asin().cos() * (theta.cos() * u + theta.sin() * v);
     output.normalize()
